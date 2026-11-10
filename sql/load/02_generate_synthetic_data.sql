@@ -16,7 +16,7 @@ USE SCHEMA INVENTORY_360_DB.RAW;
 -- Deterministic pseudo-random in [0,1) from a string key
 CREATE OR REPLACE FUNCTION RND(K VARCHAR)
 RETURNS FLOAT
-AS $$ MOD(MOD(HASH(K), 1000003) + 1000003, 1000003) / 1000003.0 $$;
+AS 'MOD(MOD(HASH(K), 1000003) + 1000003, 1000003)::FLOAT / 1000003.0';
 
 -- -----------------------------------------------------------------------------
 -- Warehouses (UK distribution network)
