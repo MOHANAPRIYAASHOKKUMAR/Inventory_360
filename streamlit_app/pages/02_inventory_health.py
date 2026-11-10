@@ -55,6 +55,8 @@ with tab_cover:
     cover["cover_band"] = pd.cut(cover["days_of_cover"].fillna(0), bins=bins, labels=labels).astype(str)
     band = cover.groupby("cover_band", as_index=False).agg(
         sku_locations=("sku", "count"), stock_value_gbp=("stock_value_gbp", "sum"))
+    band["cover_risk"] = band["cover_band"].map(
+        lambda b: "Shortage risk" if b in ("0", "0-3", "3-7") else "Excess risk" if b in ("60-120", "120+") else "Healthy")
     with st.container(border=True):
         st.subheader("Days of cover distribution", anchor=False)
         st.caption("Forward cover = stock on hand ÷ average daily demand over the last 28 days")
@@ -62,10 +64,10 @@ with tab_cover:
             alt.Chart(band).mark_bar(cornerRadiusEnd=3).encode(
                 x=alt.X("cover_band:N", sort=labels, title="Days of cover"),
                 y=alt.Y("stock_value_gbp:Q", title="Stock value", axis=charts.GBP_AXIS),
-                color=alt.condition(alt.FieldOneOfPredicate("cover_band", ["0", "0-3", "3-7"]),
-                                    alt.value("#E04F16"),
-                                    alt.condition(alt.FieldOneOfPredicate("cover_band", ["60-120", "120+"]),
-                                                  alt.value("#6941C6"), alt.value("#1D4ED8"))),
+                color=alt.Color("cover_risk:N", title=None,
+                                scale=alt.Scale(domain=["Shortage risk", "Healthy", "Excess risk"],
+                                                range=["#E04F16", "#1D4ED8", "#6941C6"]),
+                                legend=alt.Legend(orient="top")),
                 tooltip=["cover_band", alt.Tooltip("sku_locations:Q", title="SKU-locations"),
                          alt.Tooltip("stock_value_gbp:Q", format=",.0f", title="Stock £")],
             ).properties(height=300),

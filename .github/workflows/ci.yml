@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install "streamlit[snowflake]==1.67.0" snowflake-snowpark-python pandas numpy altair pytest ruff pyyaml jinja2
+      - name: Ruff
+        run: ruff check src streamlit_app tests scripts
+      - name: Pytest
+        run: pytest -q
+
+  dbt:
+    name: dbt parse and render check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dbt
+        run: pip install dbt-snowflake pyyaml jinja2
+      - name: dbt parse (no warehouse connection)
+        working-directory: dbt_inventory
+        env:
+          SNOWFLAKE_ACCOUNT: ci-placeholder
+          SNOWFLAKE_USER: ci
+          SNOWFLAKE_PASSWORD: ci
+        run: |
+          mkdir -p ~/.dbt && cp profiles.example.yml ~/.dbt/profiles.yml
+          dbt parse
+      - name: Rendered SQL is in sync with dbt models
+        run: |
+          python scripts/render_dbt_models.py > /tmp/rendered.sql
+          diff -u sql/deployment/02_dbt_models_rendered.sql /tmp/rendered.sql

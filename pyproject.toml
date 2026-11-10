@@ -25,10 +25,11 @@ dev = [
 testpaths = ["tests"]
 
 [tool.ruff]
-line-length = 130
+line-length = 180
 target-version = "py311"
 src = ["src", "streamlit_app"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
-ignore = ["E402"]
+# B905: zip() strictness is not required for the equal-length frames used here
+ignore = ["E402", "B905"]

@@ -1,0 +1,23 @@
+# Snowpark Container Services job spec for the ERP interface (not deployed).
+# Image to be pushed to: INVENTORY_360_DB.APP.INV360_IMAGES (image repository)
+# Run as a job:
+#   EXECUTE JOB SERVICE IN COMPUTE POOL <pool>
+#     NAME = INVENTORY_360_DB.APP.ERP_OUTBOX_SYNC
+#     EXTERNAL_ACCESS_INTEGRATIONS = (ERP_API_INTEGRATION)
+#     FROM SPECIFICATION_FILE = 'spec.yaml' USING STAGE @INVENTORY_360_DB.APP.SERVICE_SPECS;
+spec:
+  containers:
+    - name: erp-outbox-sync
+      image: /inventory_360_db/app/inv360_images/erp-outbox-sync:latest
+      env:
+        SNOWFLAKE_WAREHOUSE: INV360_WH
+        OUTBOX_VIEW: INVENTORY_360_DB.APP.V_REPLENISHMENT_OUTBOX
+        BATCH_SIZE: "500"
+      secrets:
+        - snowflakeSecret: INVENTORY_360_DB.APP.ERP_API_TOKEN
+          secretKeyRef: secret_string
+          envVarName: ERP_API_TOKEN
+      resources:
+        requests:
+          cpu: 0.5
+          memory: 1Gi

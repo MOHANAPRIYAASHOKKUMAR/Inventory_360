@@ -31,7 +31,7 @@ def run_query(sql: str, params: list | None = None, ttl: int = 600) -> pd.DataFr
 
 def _coerce_decimals(df: pd.DataFrame) -> pd.DataFrame:
     """Snowflake NUMBER(p, s) can arrive as decimal.Decimal objects; use floats for analytics."""
-    for col in df.columns[df.dtypes == object]:
+    for col in df.select_dtypes(include="object").columns:
         sample = df[col].dropna()
         if not sample.empty and isinstance(sample.iloc[0], Decimal):
             df[col] = pd.to_numeric(df[col], errors="coerce").astype(float)

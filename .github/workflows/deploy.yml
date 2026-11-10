@@ -1,0 +1,50 @@
+name: Deploy
+
+# Manual deployment of dbt models and the Streamlit app.
+# Required repository secrets:
+#   SNOWFLAKE_ACCOUNT      e.g. TBSLJYV-RM91730
+#   SNOWFLAKE_USER         service user with key-pair auth
+#   SNOWFLAKE_PRIVATE_KEY  PEM private key (unencrypted) for that user
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_dbt:
+        description: Run dbt build before deploying the app
+        type: boolean
+        default: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+      SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+      SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install tooling
+        run: pip install dbt-snowflake snowflake-cli
+
+      - name: dbt build
+        if: ${{ inputs.deploy_dbt }}
+        working-directory: dbt_inventory
+        run: |
+          mkdir -p ~/.dbt && cp profiles.example.yml ~/.dbt/profiles.yml
+          dbt build --target ci
+
+      - name: Configure Snowflake CLI
+        run: |
+          echo "$SNOWFLAKE_PRIVATE_KEY" > /tmp/rsa_key.p8
+          snow connection add --connection-name ci --account "$SNOWFLAKE_ACCOUNT" --user "$SNOWFLAKE_USER" \
+            --authenticator SNOWFLAKE_JWT --private-key /tmp/rsa_key.p8 --role SYSADMIN \
+            --warehouse INV360_WH --database INVENTORY_360_DB --schema APP --no-interactive
+
+      - name: Deploy Streamlit app
+        run: snow streamlit deploy inventory_360 --connection ci --replace
+
+      - name: Verify
+        run: snow sql --connection ci -q "SHOW STREAMLITS LIKE 'INVENTORY_360' IN SCHEMA INVENTORY_360_DB.APP"

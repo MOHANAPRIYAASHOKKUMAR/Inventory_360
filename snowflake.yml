@@ -11,11 +11,12 @@ entities:
     query_warehouse: INV360_WH
     runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
     compute_pool: SYSTEM_COMPUTE_POOL_CPU
-    external_access_integrations:
-      - PYPI_ACCESS_INTEGRATION
+    # No dependency file is shipped: trial accounts cannot create external access
+    # integrations, so the app relies on packages pre-installed in the container
+    # runtime (streamlit, pandas, numpy, altair, snowpark). On a paid account add
+    # pyproject.toml to artifacts and set external_access_integrations to a PyPI EAI.
     main_file: streamlit_app/streamlit_app.py
     artifacts:
-      - pyproject.toml
       - streamlit_app/streamlit_app.py
       - streamlit_app/.streamlit/config.toml
       - streamlit_app/assets/logo.svg
