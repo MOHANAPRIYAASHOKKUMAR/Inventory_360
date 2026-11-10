@@ -1,0 +1,33 @@
+# Python / virtual environments
+.venv/
+.venv-dbt/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Secrets - never commit
+.streamlit/secrets.toml
+**/.streamlit/secrets.toml
+.env
+*.p8
+*.pem
+
+# dbt
+dbt_inventory/target/
+dbt_inventory/dbt_packages/
+dbt_inventory/logs/
+dbt_inventory/.dbt_local/
+dbt_inventory/.user.yml
+logs/
+
+# Snowflake CLI
+output/
+.snowflake/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

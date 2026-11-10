@@ -1,0 +1,40 @@
+version: 2
+
+sources:
+  - name: raw
+    database: INVENTORY_360_DB
+    schema: RAW
+    description: Source-system landing tables (ERP, WMS, POS, TMS, Finance).
+    config:
+      loaded_at_field: _LOADED_AT
+      freshness:
+        warn_after: {count: 24, period: hour}
+        error_after: {count: 72, period: hour}
+    tables:
+      - name: erp_suppliers
+        description: ERP vendor master.
+        columns:
+          - name: supplier_id
+            tests: [unique, not_null]
+      - name: wms_warehouses
+        description: WMS distribution site master.
+        columns:
+          - name: warehouse_code
+            tests: [unique, not_null]
+      - name: erp_products
+        description: ERP item master.
+        columns:
+          - name: sku
+            tests: [unique, not_null]
+      - name: wms_stock_snapshot_daily
+        description: End-of-day stock position by site and SKU.
+      - name: pos_sales_daily
+        description: Daily demand and sales aggregated to the fulfilling DC.
+      - name: erp_purchase_order_lines
+        description: Purchase order lines.
+      - name: tms_shipments
+        description: Inbound shipments from the transport management system.
+      - name: fin_warehouse_costs_monthly
+        description: Monthly GL actuals for warehouse operating costs.
+      - name: fin_budgets_monthly
+        description: FY budget and latest forecast by area.

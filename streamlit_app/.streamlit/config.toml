@@ -1,0 +1,38 @@
+[server]
+runOnSave = true
+# Hot-reload the shared package during local development (run from repo root)
+folderWatchList = ["src"]
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+base = "light"
+primaryColor = "#1D4ED8"
+backgroundColor = "#F8FAFC"
+secondaryBackgroundColor = "#EEF2F7"
+textColor = "#0F172A"
+linkColor = "#1D4ED8"
+borderColor = "#D9E0EA"
+font = "sans-serif"
+baseFontSize = 14
+baseRadius = "0.6rem"
+showWidgetBorder = true
+showSidebarBorder = true
+dataframeHeaderBackgroundColor = "#E8EEF6"
+redColor = "#B42318"
+orangeColor = "#E04F16"
+yellowColor = "#F79009"
+greenColor = "#12B76A"
+blueColor = "#1D4ED8"
+violetColor = "#6941C6"
+chartCategoricalColors = ["#1D4ED8", "#0EA5E9", "#14B8A6", "#F59E0B", "#8B5CF6", "#EF4444", "#64748B", "#22C55E", "#EC4899", "#A16207"]
+chartSequentialColors = ["#EFF6FF", "#DBEAFE", "#BFDBFE", "#93C5FD", "#60A5FA", "#3B82F6", "#2563EB", "#1D4ED8", "#1E40AF", "#172554"]
+
+[theme.sidebar]
+backgroundColor = "#0B1F3A"
+secondaryBackgroundColor = "#13294B"
+textColor = "#E2E8F0"
+borderColor = "#1E3A5F"
+primaryColor = "#60A5FA"
+linkColor = "#93C5FD"

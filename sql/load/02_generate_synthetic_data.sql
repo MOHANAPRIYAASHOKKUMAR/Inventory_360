@@ -198,7 +198,9 @@ ranged AS (
          CASE p.VELOCITY_CLASS WHEN 'A' THEN 7 WHEN 'B' THEN 14 ELSE 28 END
            * IFF(s.LEAD_TIME_DAYS > 40, 2, 1) AS cycle_days,
          CASE p.VELOCITY_CLASS WHEN 'A' THEN 5 WHEN 'B' THEN 7 ELSE 10 END AS safety_days,
-         RND(p.SKU || w.WAREHOUSE_CODE || 'risk') AS r_risk
+         RND(p.SKU || w.WAREHOUSE_CODE || 'risk') AS r_risk,
+         -- Supplier x site delivery slot, so that lines consolidate onto one PO
+         RND(p.SUPPLIER_ID || w.WAREHOUSE_CODE || 'ph') AS r_phase
   FROM ERP_PRODUCTS p
   JOIN ERP_SUPPLIERS s ON s.SUPPLIER_ID = p.SUPPLIER_ID
   CROSS JOIN WMS_WAREHOUSES w
@@ -212,8 +214,7 @@ ranged AS (
 ),
 f AS (
   SELECT r.*, d.d, d.di, d.as_of,
-         FLOOR(RND(r.SKU || r.WAREHOUSE_CODE || 'ph') * r.cycle_days) AS phase,
-         MONTH(d.d) AS m,
+         MOD(FLOOR(r.r_phase * 56), r.cycle_days) AS phase,
          CASE r.CATEGORY
            WHEN 'Toys & Seasonal' THEN DECODE(MONTH(d.d), 9, 1.2, 10, 1.7, 11, 2.8, 12, 3.3, 1, 0.45, 2, 0.6, 0.8)
            WHEN 'Garden & DIY'    THEN DECODE(MONTH(d.d), 3, 1.2, 4, 1.7, 5, 2.1, 6, 2.2, 7, 1.9, 8, 1.4, 11, 0.5, 12, 0.45, 1, 0.5, 2, 0.7, 0.9)
@@ -225,7 +226,7 @@ f AS (
          1 + 0.06 * d.di / 365 AS growth_f,
          CASE r.LIFECYCLE_STATUS
            WHEN 'Discontinued' THEN GREATEST(0.04, 1 - d.di / 300)
-           WHEN 'New' THEN IFF(d.d < r.LAUNCH_DATE, 0, LEAST(1, DATEDIFF(day, r.LAUNCH_DATE, d.d) / 60 + 0.15))
+           WHEN 'New' THEN LEAST(1, DATEDIFF(day, r.LAUNCH_DATE, d.d) / 60 + 0.15)
            ELSE 1 END AS life_f
   FROM ranged r
   JOIN days d ON d.d >= IFF(r.LIFECYCLE_STATUS = 'New', r.LAUNCH_DATE, '2025-04-01'::DATE)
@@ -238,12 +239,13 @@ s AS (
               WHEN r_risk > 0.93 THEN 3.5
               WHEN r_risk > 0.86 THEN 2.0 ELSE 1.0 END AS cover_mult,
          safety_days
-           + CASE WHEN r_risk < 0.06 THEN -4 WHEN r_risk < 0.12 THEN -1 ELSE 0 END
-           + IFF(RELIABILITY_FACTOR < 0.85
-                 AND RND(SKU || WAREHOUSE_CODE || TO_VARCHAR(FLOOR(di / 21))) < (1 - RELIABILITY_FACTOR) * 0.9, -9, 0)
+           + CASE WHEN r_risk < 0.08 THEN -8 WHEN r_risk < 0.16 THEN -4 ELSE 0 END
+           + IFF(RELIABILITY_FACTOR < 0.90
+                 AND RND(SKU || WAREHOUSE_CODE || TO_VARCHAR(FLOOR(di / 21))) < (1 - RELIABILITY_FACTOR) * 1.2, -14, 0)
            + cycle_days * (1 - MOD(di + phase, cycle_days) / cycle_days) AS cover_raw,
          MOD(di + phase, cycle_days) = 0 AS is_receipt_day,
-         RND(SKU || WAREHOUSE_CODE || TO_VARCHAR(d)) AS r_day
+         RND(SKU || WAREHOUSE_CODE || TO_VARCHAR(d)) AS r_day,
+         RND(SKU || TO_VARCHAR(DATE_TRUNC('week', d))) AS r_week
   FROM f
 )
 SELECT
@@ -255,7 +257,7 @@ SELECT
   CASE WHEN LIFECYCLE_STATUS = 'Discontinued' THEN 0.40
        WHEN CATEGORY = 'Toys & Seasonal' AND MONTH(d) = 1 THEN 0.30
        WHEN CATEGORY = 'Garden & DIY' AND MONTH(d) = 9 THEN 0.20
-       ELSE 0.08 * RND(SKU || TO_VARCHAR(DATE_TRUNC('week', d))) END AS discount_pct,
+       ELSE 0.08 * r_week END AS discount_pct,
   r_day
 FROM s;
 
@@ -291,13 +293,12 @@ WITH ev AS (
 ),
 h AS (
   SELECT ev.*,
-         'PO' || TO_CHAR(expected_date, 'YYMMDD') || RIGHT(SUPPLIER_ID, 3) || RIGHT(WAREHOUSE_CODE, 2) AS po_number,
+         'PO' || TO_CHAR(expected_date, 'YYMMDD') || RIGHT(SUPPLIER_ID, 3) || WAREHOUSE_CODE AS po_number,
          DATEADD(day, -LEAD_TIME_DAYS, expected_date) AS order_date,
          RND(SUPPLIER_ID || WAREHOUSE_CODE || TO_VARCHAR(expected_date)) AS r_po,
-         CASE WHEN COUNTRY_CODE = 'GB' THEN 'Road'
+         CASE WHEN COUNTRY_CODE IN ('GB', 'TR') THEN 'Road'
               WHEN COUNTRY_CODE IN ('IE','NL','DE','FR','IT','ES','PT','PL','SE')
                    THEN IFF(RND(SUPPLIER_ID || TO_VARCHAR(expected_date) || 'm') < 0.12, 'Rail', 'Road')
-              WHEN COUNTRY_CODE = 'TR' THEN 'Road'
               ELSE IFF(RND(SUPPLIER_ID || TO_VARCHAR(expected_date) || 'm') < 0.07, 'Air', 'Sea') END AS transport_mode
   FROM ev
 )
@@ -373,12 +374,11 @@ SELECT
   IFF(arrival <= as_of, arrival, NULL),
   pallets,
   ROUND(pallets
-        * DECODE(transport_mode, 'Sea', 95, 'Air', 880, 'Rail', 120, IFF(COUNTRY_CODE = 'GB', 48, 165))
+        * DECODE(transport_mode, 'Sea', 48, 'Air', 440, 'Rail', 60, IFF(COUNTRY_CODE = 'GB', 24, 82))
         * (0.85 + 0.30 * r_frt)
         * IFF(transport_mode = 'Sea' AND planned_dispatch BETWEEN '2025-11-15' AND '2026-04-15', 1.45, 1.0)
         * (1 + 0.04 * DATEDIFF(day, '2025-04-01', planned_dispatch) / 365), 2),
-  ROUND(goods_value * CASE WHEN COUNTRY_CODE IN ('GB') THEN 0
-                           WHEN COUNTRY_CODE IN ('IE','NL','DE','FR','IT','ES','PT','PL','SE') THEN 0.0
+  ROUND(goods_value * CASE WHEN COUNTRY_CODE IN ('GB','IE','NL','DE','FR','IT','ES','PT','PL','SE') THEN 0
                            WHEN has_apparel = 1 THEN 0.12
                            ELSE 0.04 + 0.03 * RND(SUPPLIER_ID || 'duty') END, 2),
   ROUND(pallets * DECODE(transport_mode, 'Sea', 185, 'Air', 2750, 'Rail', 42, IFF(COUNTRY_CODE = 'GB', 24, 140))
@@ -414,7 +414,7 @@ cats (cost_category) AS (SELECT * FROM VALUES ('Labour'), ('Rent & Rates'), ('Ut
 SELECT b.period_month, b.WAREHOUSE_CODE, c.cost_category,
        ROUND(CASE c.cost_category
          WHEN 'Labour'                  THEN (b.units * 0.85 + b.CAPACITY_PALLETS * 1.6) * IFF(MONTH(b.period_month) IN (11, 12), 1.18, 1.0)
-         WHEN 'Rent & Rates'            THEN b.CAPACITY_PALLETS * 4.9
+         WHEN 'Rent & Rates'            THEN b.CAPACITY_PALLETS * 1.9
          WHEN 'Utilities'               THEN b.CAPACITY_PALLETS * 0.75 * IFF(MONTH(b.period_month) IN (11, 12, 1, 2), 1.4, 1.0)
          WHEN 'Equipment & Maintenance' THEN b.CAPACITY_PALLETS * 0.55
          ELSE b.shrink * 1.8 + b.units * 0.03 END
@@ -461,7 +461,8 @@ SELECT period_month, area, dim,
        ROUND(
          CASE WHEN period_month < DATE_TRUNC('month', CURRENT_DATE()) AND actual_same IS NOT NULL
                    -- Budget set before the year: actuals land within +/- ~7% (sea freight overspend in the surge)
-                   THEN actual_same / (0.95 + 0.12 * RND(area || dim || TO_VARCHAR(period_month)))
+                   THEN actual_same / ((0.95 + 0.12 * RND(area || dim || TO_VARCHAR(period_month)))
+                                       * IFF(area = 'Freight & Duty' AND period_month BETWEEN '2025-12-01' AND '2026-05-01', 1.22, 1.0))
               ELSE COALESCE(actual_prior_year, actual_same, 0) * 1.05 END, 2) AS budget_gbp,
        IFF(period_month >= DATE_TRUNC('month', CURRENT_DATE()),
            ROUND(COALESCE(actual_prior_year, actual_same, 0) * 1.05 * (0.97 + 0.12 * RND(area || dim || TO_VARCHAR(period_month) || 'fc')), 2),

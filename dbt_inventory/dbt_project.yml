@@ -1,0 +1,40 @@
+name: inventory_360
+version: "1.0.0"
+config-version: 2
+profile: inventory_360
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+analysis-paths: ["analyses"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+vars:
+  # Thresholds for stock status classification (days of cover)
+  critical_cover_days: 3
+  low_cover_days: 7
+  overstock_cover_days: 60
+  excess_cover_days: 120
+  demand_lookback_days: 28
+  # Annual holding-cost rate applied to average inventory value
+  holding_cost_rate: 0.22
+
+models:
+  inventory_360:
+    +persist_docs:
+      relation: true
+      columns: true
+    staging:
+      +schema: STAGING
+      +materialized: view
+      +tags: ["staging"]
+    marts:
+      +schema: MARTS
+      +materialized: table
+      +tags: ["marts"]
+      core:
+        +tags: ["core"]
+      reporting:
+        +tags: ["reporting"]

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="48" viewBox="0 0 240 48">
+  <g fill="none" stroke="#60A5FA" stroke-width="3">
+    <circle cx="24" cy="24" r="17"/>
+    <path d="M24 7 A17 17 0 0 1 41 24" stroke="#F8FAFC"/>
+  </g>
+  <path d="M16 27 l6 -8 l5 5 l6 -9" fill="none" stroke="#F8FAFC" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="52" y="22" font-family="Segoe UI, Arial, sans-serif" font-size="17" font-weight="700" fill="#F8FAFC">Inventory 360</text>
+  <text x="52" y="38" font-family="Segoe UI, Arial, sans-serif" font-size="11" fill="#93C5FD">Sample Retail Group</text>
+</svg>

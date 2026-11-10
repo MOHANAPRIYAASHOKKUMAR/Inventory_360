@@ -1,0 +1,87 @@
+version: 2
+
+models:
+  - name: dim_product
+    description: Product dimension enriched with supplier attributes.
+    columns:
+      - name: sku
+        tests: [unique, not_null]
+      - name: velocity_class
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['A', 'B', 'C']
+      - name: supplier_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_supplier')
+                field: supplier_id
+
+  - name: dim_supplier
+    columns:
+      - name: supplier_id
+        tests: [unique, not_null]
+
+  - name: dim_warehouse
+    columns:
+      - name: warehouse_code
+        tests: [unique, not_null]
+
+  - name: dim_date
+    columns:
+      - name: date_day
+        tests: [unique, not_null]
+
+  - name: fct_inventory_daily
+    description: Daily stock position joined to demand at site x SKU grain.
+    columns:
+      - name: qty_on_hand
+        tests: [not_null]
+      - name: warehouse_code
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_warehouse')
+                field: warehouse_code
+
+  - name: fct_purchase_orders
+    columns:
+      - name: po_line_id
+        tests: [unique, not_null]
+      - name: po_status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['RECEIVED', 'IN_TRANSIT', 'OPEN']
+
+  - name: fct_shipments
+    columns:
+      - name: shipment_id
+        tests: [unique, not_null]
+
+  - name: rpt_inventory_position
+    description: Current inventory position, stock status and replenishment recommendation per site x SKU.
+    columns:
+      - name: stock_status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Out of stock', 'Critical', 'Low', 'Healthy', 'Overstock', 'Excess']
+      - name: recommended_order_qty
+        tests: [not_null]
+
+  - name: rpt_supplier_scorecard
+    columns:
+      - name: supplier_id
+        tests: [unique, not_null]
+      - name: risk_rating
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Low', 'Medium', 'High']
+
+  - name: rpt_inventory_kpis_monthly
+  - name: rpt_logistics_monthly
+  - name: rpt_budget_vs_actual
+  - name: rpt_warehouse_utilisation

@@ -1,0 +1,27 @@
+# Copy to ~/.dbt/profiles.yml (or set DBT_PROFILES_DIR to this folder after
+# renaming to profiles.yml). Never commit real credentials.
+inventory_360:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', 'TBSLJYV-RM91730') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      # Programmatic access token (Snowsight > Settings > Authentication) or password
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'SYSADMIN') }}"
+      warehouse: INV360_WH
+      database: INVENTORY_360_DB
+      schema: STAGING
+      threads: 8
+    ci:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      authenticator: snowflake_jwt
+      private_key: "{{ env_var('SNOWFLAKE_PRIVATE_KEY') }}"
+      role: INV360_ENGINEER
+      warehouse: INV360_WH
+      database: INVENTORY_360_DB
+      schema: STAGING
+      threads: 8
