@@ -17,8 +17,9 @@ filter_scope(f, CUSTOMER_COLS)
 
 with st.container(horizontal=True, vertical_alignment="bottom"):
     channels = st.pills("Channel", CHANNELS, selection_mode="multi", key="cust_channels")
-    grain = st.segmented_control("Granularity", ["Daily", "Weekly", "Monthly"], default="Weekly", key="cust_grain") or "Weekly"
-    top_n = st.segmented_control("Top customers", [10, 20, 36], default=10, key="cust_topn") or 10
+    grain = st.segmented_control("Granularity", ["Daily", "Weekly", "Monthly"], default="Weekly", key="cust_grain",
+                                 required=True)
+    top_n = st.segmented_control("Top customers", [10, 20, 36], default=10, key="cust_topn", required=True)
 
 summary = queries.customer_summary(f)
 daily = queries.customer_sales_daily(f)

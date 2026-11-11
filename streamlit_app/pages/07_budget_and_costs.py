@@ -28,7 +28,7 @@ bva_all = bva_all[keep]
 years = sorted(bva_all["fiscal_year"].unique())
 current_fy = bva_all.loc[bva_all["period_month"] <= as_of, "fiscal_year"].max()
 with st.container(horizontal=True, vertical_alignment="bottom"):
-    fy = st.segmented_control("Financial year (outturn)", years, default=current_fy, key="bud_fy") or current_fy
+    fy = st.segmented_control("Financial year (outturn)", years, default=current_fy, key="bud_fy", required=True)
     areas = st.pills("Budget area", AREAS, selection_mode="multi", key="bud_area")
 if areas:
     bva_all = bva_all[bva_all["budget_area"].isin(areas)]

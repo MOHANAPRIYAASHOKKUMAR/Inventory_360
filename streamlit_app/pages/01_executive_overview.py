@@ -19,7 +19,8 @@ as_of = st.session_state["gf_as_of"]
 page_header("Executive overview", "Network-wide sales, inventory, availability and exceptions", f, as_of)
 filter_scope(f, CUSTOMER_COLS, note="customer filter applies to sales KPIs; inventory KPIs cover all customers")
 
-grain = st.segmented_control("Trend granularity", ["Daily", "Weekly", "Monthly"], default="Weekly", key="exec_grain") or "Weekly"
+grain = st.segmented_control("Trend granularity", ["Daily", "Weekly", "Monthly"], default="Weekly", key="exec_grain",
+                             required=True, help="Applies to the stock and sales trend charts below.")
 
 # --------------------------------------------------------------------------- #
 # Data

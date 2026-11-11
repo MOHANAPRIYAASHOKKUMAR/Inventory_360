@@ -57,7 +57,8 @@ with cols[4]:
 tab_status, tab_cover, tab_matrix, tab_abc = st.tabs(["Status by warehouse", "Cover profile", "Warehouse × category", "ABC analysis"])
 with tab_status:
     by_wh = position.groupby(["warehouse_name", "stock_status"], as_index=False)["stock_value_gbp"].sum()
-    basis = st.segmented_control("Measure", ["Stock value", "SKU-locations"], default="Stock value", key="inv_status_basis")
+    basis = st.segmented_control("Measure", ["Stock value", "SKU-locations"], default="Stock value", key="inv_status_basis",
+                                 required=True)
     if basis == "SKU-locations":
         by_wh = position.groupby(["warehouse_name", "stock_status"], as_index=False).agg(stock_value_gbp=("sku", "count"))
     charts.show(charts.bar(by_wh, "warehouse_name", "stock_value_gbp", "stock_status", horizontal=True, height=380,
@@ -77,8 +78,8 @@ with tab_cover:
                "amber: 3-7 or 60-120 days.")
 with tab_matrix:
     measure = st.segmented_control("Show", ["Availability (1 − OOS rate 28d)", "Excess stock (£)"],
-                                   default="Availability (1 − OOS rate 28d)", key="inv_matrix")
-    if measure and measure.startswith("Excess"):
+                                   default="Availability (1 − OOS rate 28d)", key="inv_matrix", required=True)
+    if measure.startswith("Excess"):
         pv = position.pivot_table(index="warehouse_name", columns="category", values="excess_stock_value_gbp", aggfunc="sum").fillna(0)
         charts.show(charts.heatmap(pv, kind="gbp", reverse=True, height=380), alt="Excess stock by warehouse and category")
     else:

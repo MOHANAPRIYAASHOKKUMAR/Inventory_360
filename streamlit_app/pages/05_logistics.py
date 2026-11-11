@@ -16,7 +16,8 @@ filter_scope(f, SHIPMENT_COLS, note="date range applies to dispatch date")
 
 with st.container(horizontal=True, vertical_alignment="bottom"):
     modes = st.pills("Transport mode", MODES, selection_mode="multi", key="log_modes")
-    grain = st.segmented_control("View", ["By mode", "By carrier", "By warehouse"], default="By mode", key="log_view") or "By mode"
+    grain = st.segmented_control("View", ["By mode", "By carrier", "By warehouse"], default="By mode", key="log_view",
+                                 required=True)
 
 ship = queries.shipments_monthly(f)
 ship_p = queries.shipments_monthly(f.prior())
