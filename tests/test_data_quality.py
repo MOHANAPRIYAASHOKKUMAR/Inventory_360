@@ -56,6 +56,22 @@ def test_daily_volume_empty():
     assert c.status == RED
 
 
+def test_lumpy_purchase_orders_are_not_flagged():
+    # Real pattern: daily PO rows swing 80-200 around a median of ~135
+    [c] = dq.daily_volume(_counts([135, 80, 200, 120, 150, 95, 170] * 4 + [122]), "Purchase orders")
+    assert c.status == GREEN
+
+
+def test_near_empty_purchase_order_day_is_still_flagged():
+    [c] = dq.daily_volume(_counts([135] * 28 + [20]), "Purchase orders")
+    assert c.status == RED
+
+
+def test_same_lumpy_pattern_is_flagged_for_steady_sources():
+    [c] = dq.daily_volume(_counts([135, 80, 200, 120, 150, 95, 170] * 4 + [122]), "Inventory snapshots")
+    assert c.status == AMBER
+
+
 def test_rebuilt_and_overall():
     checks = dq.rebuilt({"a": datetime(2026, 11, 10, 6), "b": None})
     assert [c.status for c in checks] == [GREEN, AMBER]

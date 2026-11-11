@@ -17,6 +17,9 @@ from inventory360.business_logic.kpi_framework import evaluate
 
 DAY_DROP_AMBER = 0.05    # a day with >5 % fewer rows than the 28-day median is incomplete
 DAY_DROP_RED = 0.20
+# Event-driven sources (POs follow supplier delivery schedules) are lumpy by nature:
+# daily rows swing roughly -40 % / +50 % around the median, so only a near-empty day is suspect.
+VOLUME_TOLERANCE = {"Purchase orders": (0.60, 0.80)}
 STATUS_ORDER = {RED: 3, AMBER: 2, GREEN: 1}
 
 
@@ -55,7 +58,11 @@ def duplicates(dupes: dict[str, int]) -> list[Check]:
 
 
 def daily_volume(counts: pd.DataFrame, source: str, date_col: str = "d", count_col: str = "n") -> list[Check]:
-    """Incomplete days and the latest day's volume vs the trailing 28-day median."""
+    """Incomplete days and the latest day's volume vs the trailing 28-day median.
+
+    Tolerances are per source (``VOLUME_TOLERANCE``); steady daily feeds use 5 % / 20 %.
+    """
+    amber_drop, red_drop = VOLUME_TOLERANCE.get(source, (DAY_DROP_AMBER, DAY_DROP_RED))
     if counts.empty:
         return [Check("Volume", source, RED, "No rows in the last 35 days")]
     c = counts.sort_values(date_col)
@@ -63,9 +70,9 @@ def daily_volume(counts: pd.DataFrame, source: str, date_col: str = "d", count_c
     if median <= 0:
         return [Check("Volume", source, RED, "Median daily volume is zero")]
     drop = 1 - c[count_col] / median
-    short = c[drop > DAY_DROP_AMBER]
+    short = c[drop > amber_drop]
     latest_drop = float(drop.iloc[-1])
-    status = RED if latest_drop > DAY_DROP_RED else AMBER if latest_drop > DAY_DROP_AMBER or len(short) else GREEN
+    status = RED if latest_drop > red_drop else AMBER if latest_drop > amber_drop or len(short) else GREEN
     latest = pd.Timestamp(c[date_col].iloc[-1])
     detail = (f"Latest day {latest:%d %b}: {int(c[count_col].iloc[-1]):,} rows vs median {median:,.0f}"
               + (f" · {len(short)} incomplete day(s) in the window" if len(short) else ""))
