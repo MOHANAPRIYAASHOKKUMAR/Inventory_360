@@ -87,6 +87,11 @@ All commands below use `-c inv360`; replace it with your connection name.
 | 6 | `sql/deployment/02_dbt_models_rendered.sql` | SYSADMIN | STAGING and MARTS tables (25 models) |
 | 7 | `sql/deployment/01_app_objects.sql` | SYSADMIN (in script) | App audit log and replenishment outbox |
 | 8 | `sql/roles/02_callers_rights.sql` | ACCOUNTADMIN (in script) | Caller grants for the app owner `INV360_ADMIN` |
+| 9 | `sql/roles/03_hardening.sql` | SYSADMIN (in script) | Least-privilege APP grants: viewers read the outbox view only, planners insert only |
+
+Account sign-in hardening (MFA, break-glass admin, password and authentication policies) is in
+`sql/roles/04_account_security.sql`. It is **not** part of the run order: read its checklist and run
+it section by section, keeping one admin session open.
 
 ```powershell
 $c = "inv360"
@@ -98,6 +103,7 @@ $c = "inv360"
 .venv\Scripts\snow sql -c $c --role SYSADMIN --warehouse INV360_WH -f sql/deployment/02_dbt_models_rendered.sql
 .venv\Scripts\snow sql -c $c -f sql/deployment/01_app_objects.sql
 .venv\Scripts\snow sql -c $c -f sql/roles/02_callers_rights.sql
+.venv\Scripts\snow sql -c $c -f sql/roles/03_hardening.sql
 ```
 
 **Alternative to step 6 (dbt):** copy `dbt_inventory/profiles.example.yml` to
@@ -166,7 +172,8 @@ $env:SNOWFLAKE_DEFAULT_CONNECTION_NAME = "inv360"
 | Sample data | Synthetic and deterministic, anchored to the current date. Re-running `02_generate_synthetic_data.sql` replaces all RAW data up to yesterday; then re-run steps 5–6 of section 4 and the quality checks. |
 | Staging | Materialised as tables. A view cannot be replaced by a table of the same name, so drop old `STAGING.STG_*` views first when upgrading an older deployment. |
 | Cost | The warehouse (`INV360_WH`), the Streamlit compute pool and each user's session queries consume credits. Caller's rights caches results per user session, so many users means more queries. |
-| Security | No credentials are stored in the repository. `.env` files and `profiles.yml` are git-ignored; use `.env.example` and `profiles.example.yml` as templates. |
+| Security | No credentials are stored in the repository. `.env` files and `profiles.yml` are git-ignored; use `.env.example` and `profiles.example.yml` as templates. Inside Snowflake the app only runs with the viewer's own role (restricted caller's rights); if that identity is unavailable it shows an access message instead of falling back to the owner. |
+| GitHub deploy | `.github/workflows/deploy.yml` needs a service user with key-pair auth that is granted `INV360_ADMIN`, and the secrets `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PRIVATE_KEY` (encrypted PEM) and `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE`. |
 
 ## Troubleshooting
 

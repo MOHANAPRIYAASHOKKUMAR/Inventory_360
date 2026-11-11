@@ -136,4 +136,5 @@ eligibility findings.
 
 - Never commit `secrets.toml`, `profiles.yml`, `.env`, or key files — all are in `.gitignore`.
 - Virtual environments (`.venv/`, `.venv-dbt/`) are ignored; GitHub rejects their >100 MB binaries.
-- App queries are qmark-parameterised; write-back runs with the app owner's rights and is audited in `APP.APP_AUDIT_LOG`.
+- App queries are qmark-parameterised and run with **restricted caller's rights** (the viewer's own role); the app fails closed if that identity is missing. Write-back is insert-only and audited in `APP.APP_AUDIT_LOG`.
+- Least-privilege APP grants: `sql/roles/03_hardening.sql`. Account sign-in hardening for review: `sql/roles/04_account_security.sql`.

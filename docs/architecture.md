@@ -66,14 +66,16 @@ streamlit_app/streamlit_app.py      navigation, global filters, branding
 SYSADMIN
   └── INV360_ADMIN      platform owner; owns APP objects and the Streamlit app
         └── INV360_ENGINEER   builds RAW / STAGING / MARTS
-              └── INV360_PLANNER    MARTS read + APP insert/update (write-back)
-                    └── INV360_VIEWER     MARTS + APP read; app usage
+              └── INV360_PLANNER    MARTS read + APP insert only (write-back; no UPDATE)
+                    └── INV360_VIEWER     MARTS read + outbox view; app and warehouse USAGE
 ```
 
-Defined in `sql/roles/01_roles_and_grants.sql`. Future grants keep new mart tables readable without
-re-granting. The Streamlit app runs with its owner's rights, so in-app actions (including replenishment
-submission) are available to anyone granted USAGE on the app — limit app grants accordingly. User
-identity is captured with `CURRENT_USER()` defaults on write-back tables.
+Defined in `sql/roles/01_roles_and_grants.sql` and `sql/roles/03_hardening.sql`. Future grants keep new
+mart tables readable without re-granting. The Streamlit app runs with **restricted caller's rights**: every
+query uses the viewer's own default role, and only where the app owner `INV360_ADMIN` holds a matching
+caller grant (`sql/roles/02_callers_rights.sql`). If the viewer's identity is unavailable the app fails
+closed rather than using the owner's rights. Order status changes and the audit trail can't be edited by
+planners; user identity is captured with `CURRENT_USER()` defaults on write-back tables.
 
 ## CI/CD
 
