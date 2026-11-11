@@ -13,6 +13,8 @@ for path in (APP_DIR, APP_DIR.parent / "src"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+import os  # noqa: E402
+
 import streamlit as st  # noqa: E402
 
 from components import filters, quality  # noqa: E402
@@ -55,28 +57,37 @@ if identity["error"] or role not in access.APP_ROLES and access.override_tier() 
     st.stop()
 
 PAGES = APP_DIR / "pages"
+# Test hook (local only, ignored in Snowflake): INV360_START_PAGE=<file> opens that page by default so
+# headless tests run it through this navigation script, with the sidebar filters in place.
+START_PAGE = (None if os.getenv("SNOWFLAKE_HOST") else os.getenv("INV360_START_PAGE")) or "01_executive_overview.py"
+
+
+def _page(file: str, title: str, icon: str) -> st.Page:
+    return st.Page(PAGES / file, title=title, icon=icon, default=file == START_PAGE)
+
+
 sections = {
         "Overview": [
-            st.Page(PAGES / "01_executive_overview.py", title="Executive overview", icon=":material/dashboard:", default=True),
-            st.Page(PAGES / "10_customers_and_sales.py", title="Customers & sales", icon=":material/storefront:"),
+            _page("01_executive_overview.py", "Executive overview", ":material/dashboard:"),
+            _page("10_customers_and_sales.py", "Customers & sales", ":material/storefront:"),
         ],
         "Inventory": [
-            st.Page(PAGES / "02_inventory_health.py", title="Inventory health", icon=":material/inventory_2:"),
-            st.Page(PAGES / "03_replenishment.py", title="Replenishment planner", icon=":material/autorenew:"),
-            st.Page(PAGES / "08_demand_forecast.py", title="Demand forecast", icon=":material/trending_up:"),
+            _page("02_inventory_health.py", "Inventory health", ":material/inventory_2:"),
+            _page("03_replenishment.py", "Replenishment planner", ":material/autorenew:"),
+            _page("08_demand_forecast.py", "Demand forecast", ":material/trending_up:"),
         ],
         "Supply chain": [
-            st.Page(PAGES / "04_suppliers.py", title="Supplier performance", icon=":material/handshake:"),
-            st.Page(PAGES / "05_logistics.py", title="Logistics & freight", icon=":material/local_shipping:"),
-            st.Page(PAGES / "06_warehouses.py", title="Warehouse network", icon=":material/warehouse:"),
+            _page("04_suppliers.py", "Supplier performance", ":material/handshake:"),
+            _page("05_logistics.py", "Logistics & freight", ":material/local_shipping:"),
+            _page("06_warehouses.py", "Warehouse network", ":material/warehouse:"),
         ],
         "Finance": [
-            st.Page(PAGES / "07_budget_and_costs.py", title="Budget & costs", icon=":material/account_balance:"),
+            _page("07_budget_and_costs.py", "Budget & costs", ":material/account_balance:"),
         ],
 }
 if tier >= Tier.DEVELOPER:
     sections["Platform"] = [
-        st.Page(PAGES / "09_data_governance.py", title="Data & governance", icon=":material/verified_user:"),
+        _page("09_data_governance.py", "Data & governance", ":material/verified_user:"),
     ]
 # Pages not registered here cannot be opened, even by URL
 page = st.navigation(sections, position="sidebar")

@@ -252,7 +252,8 @@ with section("Category scorecard", f"{f.start:%d %b %Y} – {f.end:%d %b %Y} · 
         column_config={
             "category": "Category", "net_sales_gbp": gbp("Net sales"),
             "sales_share": st.column_config.ProgressColumn("Sales mix", format="percent", min_value=0,
-                                                           max_value=float(cat["sales_share"].max() or 1)),
+                                                           # NaN when the filters match no sales ("nan or 1" stays NaN)
+                                                           max_value=float(cat["sales_share"].max()) if cat["sales_share"].notna().any() else 1.0),
             "gross_margin": pct("Gross margin"), "margin_status": "Margin RAG",
             "avg_stock_value_gbp": gbp("Avg stock"), "stock_turns": num("Stock turn", 1, "x"),
             "availability": pct("Availability"), "availability_status": "Availability RAG",
