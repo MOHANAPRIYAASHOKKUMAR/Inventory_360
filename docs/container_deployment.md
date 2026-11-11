@@ -54,7 +54,7 @@ Streamlit exposes `GET /_stcore/health` → `200 ok` when the server is ready. I
 | `INV360_DATABASE` | `INVENTORY_360_DB` | Database holding RAW / STAGING / MARTS / APP |
 | `INV360_WAREHOUSE` | `INV360_WH` | Warehouse for queries |
 | `INV360_SCHEMA` | `MARTS` | Default schema for the session |
-| `SNOWFLAKE_ROLE` | `INV360_PLANNER` | Role for `env` mode (SPCS uses the service owner role) |
+| `SNOWFLAKE_ROLE` | `INV360_VIEWER` | Role for `env` mode (SPCS uses the service owner role, opt-in via `INV360_ALLOW_SERVICE_IDENTITY`) |
 | `PORT` | `8501` | Streamlit port inside the container |
 
 ## Account eligibility (checked 2026-11-11 on `TBSLJYV-RM91730`, AWS us-east-2)
@@ -93,9 +93,9 @@ eligible (paid / on-demand) account once Docker is installed and the local conta
      authentication fails.
 4. **A role for the app user.** No `INV360_*` role is currently granted to any user:
    ```sql
-   GRANT ROLE INV360_PLANNER TO USER MohanaAshok;
+   GRANT ROLE INV360_VIEWER TO USER MohanaAshok;   -- INV360_PLANNER to test submit
    ```
-   (or set `SNOWFLAKE_ROLE=ACCOUNTADMIN` in `.env` for a first test only).
+   Never run the container as ACCOUNTADMIN: the app acts with exactly this role.
 
 `secrets/` and `.env` must never be committed — `*.p8`, `*.pem` and `.env` are in `.gitignore` and `.dockerignore`.
 
@@ -116,10 +116,10 @@ docker images inventory-360
 Copy-Item .env.example .env      # then fill in the credential values
 ```
 
-Key-pair (mount the key read-only):
+Key-pair (mount the key read-only). `127.0.0.1:` keeps the app reachable from this PC only:
 
 ```powershell
-docker run --rm -d --name inv360 -p 8501:8501 --env-file .env `
+docker run --rm -d --name inv360 -p 127.0.0.1:8501:8501 --env-file .env `
   -e SNOWFLAKE_PRIVATE_KEY_FILE=/secrets/rsa_key.p8 `
   -v ${PWD}\secrets:/secrets:ro `
   inventory-360:1.0.0
@@ -128,7 +128,7 @@ docker run --rm -d --name inv360 -p 8501:8501 --env-file .env `
 PAT (value set as `SNOWFLAKE_PASSWORD` in `.env`):
 
 ```powershell
-docker run --rm -d --name inv360 -p 8501:8501 --env-file .env inventory-360:1.0.0
+docker run --rm -d --name inv360 -p 127.0.0.1:8501:8501 --env-file .env inventory-360:1.0.0
 ```
 
 Verify:
