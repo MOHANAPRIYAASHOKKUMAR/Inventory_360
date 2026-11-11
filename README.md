@@ -67,6 +67,9 @@ table with row drill-down, and CSV export.
 
 ## Getting started
 
+> **New to this repository?** Follow [SETUP.md](SETUP.md) for the full step-by-step guide:
+> prerequisites, build order, deployment, user access and troubleshooting.
+
 Prerequisites: Python 3.11, Git, a Snowflake connection in `~/.snowflake/connections.toml`.
 
 ```powershell

@@ -4,7 +4,10 @@ runOnSave = true
 folderWatchList = ["src"]
 
 [client]
-toolbarMode = "minimal"
+# Business users never see developer menus or stack traces; pages catch errors and
+# show technical detail only to the Developer tier (see streamlit_app.py).
+toolbarMode = "viewer"
+showErrorDetails = "type"
 
 # Inventory 360 corporate theme: navy and white, teal accent, light grey canvas.
 # Locked light appearance (no [theme.light]/[theme.dark] sections).

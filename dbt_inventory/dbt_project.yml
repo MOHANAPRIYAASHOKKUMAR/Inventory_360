@@ -28,7 +28,9 @@ models:
       columns: true
     staging:
       +schema: STAGING
-      +materialized: view
+      # Tables, not views: staging is rebuilt once per load, so marts and the app read
+      # persisted, pruned micro-partitions instead of re-running source transforms.
+      +materialized: table
       +tags: ["staging"]
     marts:
       +schema: MARTS

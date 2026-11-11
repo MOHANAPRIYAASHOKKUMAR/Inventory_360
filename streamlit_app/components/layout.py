@@ -10,12 +10,16 @@ import pandas as pd
 import streamlit as st
 
 from inventory360.business_logic.exceptions import AMBER, GREEN, NA, RED
+from inventory360.business_logic.kpi_framework import KPIS, NO_DATA, NO_TARGET, KpiResult
 from inventory360.data_access.filters import GlobalFilters, applicability
-from inventory360.utils.formatting import pct_change
+from inventory360.utils.formatting import fmt_days, fmt_gbp, fmt_int, fmt_pct, pct_change
 
 RAG_BADGE = {GREEN: ("green", ":material/check_circle:"), AMBER: ("orange", ":material/error:"),
-             RED: ("red", ":material/cancel:"), NA: ("gray", ":material/remove:")}
+             RED: ("red", ":material/cancel:"), NA: ("gray", ":material/remove:"),
+             NO_DATA: ("gray", ":material/remove:"), NO_TARGET: ("gray", ":material/flag:")}
 RAG_TEXT = {GREEN: "#15803D", AMBER: "#B45309", RED: "#B42318", NA: "#64748B"}
+STATUS_WORD = {GREEN: "On target", AMBER: "Watch", RED: "Off target", NA: "No data", NO_DATA: "No data",
+               NO_TARGET: "No target"}
 
 
 def page_header(title: str, subtitle: str, f: GlobalFilters | None = None, as_of=None) -> None:
@@ -31,7 +35,10 @@ def page_header(title: str, subtitle: str, f: GlobalFilters | None = None, as_of
 
 
 def filter_scope(f: GlobalFilters, columns: Mapping[str, str], *, use_date: bool = True, note: str | None = None) -> None:
-    """One-line statement of which global filters this page honours."""
+    """Active-filter chips plus one line stating which global filters this page honours."""
+    from components import filters as _filters  # local import: filters is a sibling component
+
+    _filters.chips()
     applied, ignored = applicability(f, columns, use_date=use_date)
     parts = []
     if applied:
@@ -47,35 +54,97 @@ def filter_scope(f: GlobalFilters, columns: Mapping[str, str], *, use_date: bool
 
 
 def rag_badge(status: str, text: str | None = None) -> None:
+    """Status chip. The status is always spelled out (never colour alone)."""
     colour, icon = RAG_BADGE.get(status, RAG_BADGE[NA])
-    st.badge(text or status, icon=icon, color=colour)
+    word = STATUS_WORD.get(status, status)
+    st.badge(f"{word} · {text}" if text else word, icon=icon, color=colour)
 
 
-def _delta(current, previous, *, points: bool) -> str | None:
-    if current is None or previous is None or pd.isna(current) or pd.isna(previous):
-        return None
+def _missing(v) -> bool:
+    return v is None or pd.isna(v)
+
+
+def _delta(current, previous, *, points: bool) -> tuple[str | None, bool]:
+    """Delta text and whether the change is within the flat band (0.1 pt / 0.5 %)."""
+    if _missing(current) or _missing(previous):
+        return None, False
     if points:
-        return f"{(current - previous) * 100:+.1f} pts"
+        diff = current - previous
+        return f"{diff * 100:+.1f} pts", abs(diff) < 0.001
     change = pct_change(current, previous)
-    return None if change is None else f"{change * 100:+.1f}%"
+    if change is None:
+        return None, False
+    return f"{change * 100:+.1f}%", abs(change) < 0.005
+
+
+def _formatter(value: str, fmt, points: bool):
+    """Formatter for the comparison value, inferred from the displayed value when not given."""
+    if callable(fmt):
+        return fmt
+    unit = fmt or ("pct" if points or value.endswith("%") else "gbp" if "£" in value else
+                   "days" if value.endswith("days") else "x" if value.endswith("x") else "int")
+    return {"pct": fmt_pct, "gbp": fmt_gbp, "days": fmt_days, "x": lambda v: f"{v:.1f}x",
+            "int": fmt_int, "ratio": lambda v: f"{v:.1f}x", "num": fmt_int}.get(unit, fmt_int)
+
+
+def _spark(spark) -> list | None:
+    """Sparkline only when it says something: >= 4 points with some variance."""
+    if spark is None:
+        return None
+    values = [v for v in list(spark) if not _missing(v)]
+    return values if len(values) >= 4 and max(values) != min(values) else None
 
 
 def kpi(label: str, value: str, *, current=None, previous=None, inverse: bool = False, points: bool = False,
         status: str | None = None, status_text: str | None = None, help: str | None = None, spark=None,
-        desc: str = "vs prior period") -> None:
-    """Bordered KPI card: value, period-over-period delta, optional sparkline and RAG chip.
+        desc: str = "vs prior period", key: str | None = None, fmt=None) -> None:
+    """Standard KPI card used on every page.
 
-    ``inverse`` marks KPIs where a fall is good; ``points`` shows ratio deltas in percentage points.
+    Order: title (help icon = definition) · main value · change vs comparison with a
+    trend arrow coloured by whether the move is favourable · comparison value · status
+    chip (icon + words) · optional sparkline. ``inverse`` marks KPIs where a fall is
+    good; ``points`` shows ratio deltas in percentage points; ``key`` pulls the KPI
+    definition from the registry.
     """
-    delta = _delta(current, previous, points=points)
+    spec = KPIS.get(key) if key else None
+    if spec and help is None:
+        help = spec.definition
+    delta, flat = _delta(current, previous, points=points)
     with st.container(border=True, height="stretch", gap="small"):
         st.metric(
-            label, value, delta=delta, delta_color="inverse" if inverse else "normal",
-            delta_description=desc if delta else None, help=help,
-            chart_data=list(spark) if spark is not None and len(spark) > 1 else None, chart_type="area",
+            label, value, delta=delta,
+            delta_color="off" if flat else ("inverse" if inverse else "normal"),
+            delta_arrow="off" if flat else "auto",
+            delta_description=(desc + (" · flat" if flat else "")) if delta else None, help=help,
+            chart_data=_spark(spark), chart_type="area",
         )
+        if not _missing(previous) and value != "–":
+            st.caption(f"Comparison: {_formatter(value, fmt, points)(previous)}")
         if status:
             rag_badge(status, status_text)
+        elif value == "–":
+            rag_badge(NO_DATA, "nothing in the current filters")
+
+
+def kpi_result(r: KpiResult, *, label: str | None = None, spark=None, desc: str = "vs prior period",
+               status_text: str | None = None) -> None:
+    """KPI card from a framework result (value/target formatting from the spec unit)."""
+    s = r.spec
+    fmt = {"pct": fmt_pct, "gbp": fmt_gbp, "days": fmt_days, "ratio": lambda v: f"{v:.1f}x", "num": fmt_int}[s.unit]
+    value = "–" if r.value is None else fmt(r.value)
+    if status_text is None and r.target is not None:
+        status_text = f"Target {'≥' if s.higher_is_better else '≤'} {fmt(r.target)}"
+    kpi(label or s.label, value, current=r.value, previous=r.previous, inverse=not s.higher_is_better,
+        points=s.unit == "pct", status=None if r.status == NO_DATA and r.value is None else r.status,
+        status_text=status_text, help=s.definition, spark=spark, desc=desc, fmt=fmt)
+
+
+def kpi_grid(n: int, per_row: int = 4):
+    """Columns for ``n`` KPI cards, wrapping after ``per_row`` (keeps rows equal height)."""
+    cols = []
+    for start in range(0, n, per_row):
+        cols += st.columns(per_row)[: min(per_row, n - start)]
+    return cols
 
 
 @contextmanager

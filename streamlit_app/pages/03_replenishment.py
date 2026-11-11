@@ -5,8 +5,9 @@ import streamlit as st
 from components import charts, filters
 from components.layout import day, download, filter_scope, gbp, kpi, num, page_header, section
 from inventory360.business_logic.replenishment import Scenario, recalculate_plan
-from inventory360.data_access import queries
+from inventory360.data_access import connection, queries
 from inventory360.data_access.queries import POSITION_COLS
+from inventory360.utils import access
 from inventory360.utils.config import PRIORITY_ORDER
 from inventory360.utils.formatting import fmt_gbp, fmt_int, pct_change
 
@@ -104,18 +105,20 @@ if search:
     recs = recs[recs["sku"].str.lower().str.contains(s, regex=False) | recs["product_name"].str.lower().str.contains(s, regex=False)]
 recs = recs.assign(prio_rank=recs["scenario_priority"].map({p: i for i, p in enumerate(PRIORITY_ORDER)})) \
            .sort_values(["prio_rank", "scenario_order_value_gbp"], ascending=[True, False])
-recs = recs.assign(approve=recs["scenario_priority"] == "P1 - Urgent", approved_qty=recs["scenario_order_qty"])
+can_submit = access.has(access.Tier.PLANNER)
+recs = recs.assign(approve=(recs["scenario_priority"] == "P1 - Urgent") & can_submit, approved_qty=recs["scenario_order_qty"])
 
 GRID = ["approve", "scenario_priority", "sku", "product_name", "warehouse_name", "supplier_name", "stock_status",
         "qty_on_hand", "inventory_position_qty", "scenario_reorder_point", "scenario_order_qty", "approved_qty",
         "min_order_qty", "unit_cost_gbp", "scenario_order_value_gbp", "earliest_arrival_if_ordered"]
 with section(f"Recommended orders · {len(recs):,} lines",
-             "Tick lines to approve and adjust quantities. Approved quantities are rounded up to the supplier MOQ."):
+             "Tick lines to approve and adjust quantities. Approved quantities are rounded up to the supplier MOQ."
+             if can_submit else "Read-only view. Approving and submitting orders needs the Planner role."):
     with st.container(horizontal=True, horizontal_alignment="right"):
         download(recs[GRID[1:]], "replenishment recommendations", key="dl_repl_recs")
     edited = st.data_editor(
         recs[GRID], hide_index=True, height=440, key="repl_editor", alt="Replenishment recommendations",
-        disabled=[c for c in GRID if c not in ("approve", "approved_qty")],
+        disabled=GRID if not can_submit else [c for c in GRID if c not in ("approve", "approved_qty")],
         column_config={
             "approve": st.column_config.CheckboxColumn("Approve", width="small"),
             "scenario_priority": "Priority", "sku": "SKU",
@@ -162,8 +165,12 @@ def confirm_submission(lines_df: pd.DataFrame, value: float) -> None:
     if st.button("Confirm and submit", type="primary", icon=":material/send:", width="stretch"):
         try:
             written = queries.submit_replenishment_requests(lines_df, note or "")
-        except Exception as exc:  # surfaced to the planner; nothing partially written (single INSERT)
-            st.error(f"Submission failed: {exc}", icon=":material/error:")
+        except (access.AccessDenied, connection.DataAccessDenied):
+            st.error("Your role can't submit orders. Ask for INV360_PLANNER access.", icon=":material/lock:")
+            return
+        except Exception:  # nothing partially written (single INSERT)
+            st.error("Submission failed. Nothing was written - please try again or contact the administrator.",
+                     icon=":material/error:")
             return
         st.session_state.repl_last_submit = (written, value)
         st.rerun()
@@ -174,7 +181,9 @@ with right:
         c1, c2 = st.columns(2)
         c1.metric("Approved lines", fmt_int(len(approved)))
         c2.metric("Approved value", fmt_gbp(approved_value))
-        if st.button("Submit approved orders", type="primary", icon=":material/send:", disabled=approved.empty, width="stretch"):
+        if not can_submit:
+            st.caption("Submitting orders needs the Planner role (INV360_PLANNER).")
+        elif st.button("Submit approved orders", type="primary", icon=":material/send:", disabled=approved.empty, width="stretch"):
             confirm_submission(approved, approved_value)
 
 if "repl_last_submit" in st.session_state:

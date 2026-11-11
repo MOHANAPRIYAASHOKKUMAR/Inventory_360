@@ -13,13 +13,13 @@ for path in (APP_DIR, APP_DIR.parent / "src"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-import os  # noqa: E402
-
 import streamlit as st  # noqa: E402
 
-from components import filters  # noqa: E402
+from components import filters, quality  # noqa: E402
 from inventory360 import __version__  # noqa: E402
 from inventory360.data_access import connection, queries  # noqa: E402
+from inventory360.utils import access  # noqa: E402
+from inventory360.utils.access import Tier  # noqa: E402
 from inventory360.utils.config import APP_NAME, COMPANY_NAME  # noqa: E402
 
 st.set_page_config(
@@ -31,33 +31,28 @@ st.set_page_config(
 st.logo(str(APP_DIR / "assets" / "logo.svg"), icon_image=str(APP_DIR / "assets" / "icon.svg"), size="large")
 
 
-PLATFORM_ROLES = {"INV360_PLANNER", "INV360_ENGINEER", "INV360_ADMIN", "SYSADMIN", "ACCOUNTADMIN"}
+# --------------------------------------------------------------------------- #
+# Identity and tier. The session connection is opened HERE, at the top of the
+# script: caller's-rights viewer tokens are only valid at the start of a session.
+# --------------------------------------------------------------------------- #
+identity = connection.init_session()
+role = identity["role"]
+tier = access.override_tier() or access.tier_for_role(role)
+st.session_state["access_tier"] = tier
+st.session_state["viewer_role"] = role
 
-
-def _can_view_platform() -> bool:
-    """Data & governance is hidden from read-only viewers (INV360_VIEWER).
-
-    The app itself runs with owner's rights, so the viewer's role is read through a
-    restricted caller's-rights connection (container runtime only). Only the PRIMARY
-    role is checked: CURRENT_ROLE() is the viewer's default role. IS_ROLE_IN_SESSION
-    is not used because DEFAULT_SECONDARY_ROLES = ('ALL') would activate every
-    granted role. Locally the developer's own connection is checked. Fails closed.
-    """
-    if "can_view_platform" not in st.session_state:
-        try:
-            conn = (st.connection("snowflake-callers-rights") if os.getenv("SNOWFLAKE_HOST")
-                    else connection.get_connection())
-            role = str(conn.query("select current_role() as r", ttl=0).iloc[0, 0]).upper()
-            st.session_state["viewer_role"] = role
-            st.session_state["can_view_platform"] = role in PLATFORM_ROLES
-        except Exception:  # noqa: BLE001 - any failure means no access
-            st.session_state["can_view_platform"] = False
-    return st.session_state["can_view_platform"]
-
-
-# Resolve the viewer's access before building navigation: caller's-rights tokens are
-# only valid at the start of the session.
-show_platform = _can_view_platform()
+if identity["error"] or role not in access.APP_ROLES and access.override_tier() is None:
+    # No usable Inventory 360 role: explain how to get access, no stack trace
+    st.title(APP_NAME)
+    st.warning(
+        "Your Snowflake default role doesn't give access to Inventory 360. Ask the platform "
+        "administrator to grant you INV360_VIEWER (read-only) or INV360_PLANNER and set it as "
+        "your default role, then reopen the app.",
+        icon=":material/lock:",
+    )
+    if role:
+        st.caption(f"Current default role: {role}")
+    st.stop()
 
 PAGES = APP_DIR / "pages"
 sections = {
@@ -79,7 +74,7 @@ sections = {
             st.Page(PAGES / "07_budget_and_costs.py", title="Budget & costs", icon=":material/account_balance:"),
         ],
 }
-if show_platform:
+if tier >= Tier.DEVELOPER:
     sections["Platform"] = [
         st.Page(PAGES / "09_data_governance.py", title="Data & governance", icon=":material/verified_user:"),
     ]
@@ -87,16 +82,40 @@ if show_platform:
 page = st.navigation(sections, position="sidebar")
 
 # Reference data (cached 1 h) drives the global filters on every page
-lo, hi = queries.load_date_bounds()
-st.session_state["gf_current"] = filters.render(
-    queries.load_warehouses(), queries.load_products(), queries.load_suppliers(), queries.load_customers(),
-    lo.date(), hi.date(),
-)
+try:
+    lo, hi = queries.load_date_bounds()
+    st.session_state["gf_current"] = filters.render(
+        queries.load_warehouses(), queries.load_products(), queries.load_suppliers(), queries.load_customers(),
+        lo.date(), hi.date(),
+    )
+except connection.DataAccessDenied as exc:
+    st.error(connection.DENIED_MESSAGE, icon=":material/lock:")
+    if tier >= Tier.DEVELOPER:
+        st.code(exc.detail)
+    st.stop()
 st.session_state["gf_as_of"] = hi
 
 with st.sidebar:
     st.divider()
-    st.caption(f"{COMPANY_NAME} · UK retail & distribution  \nAll values in GBP (£) · v{__version__}  \n"
-               f"Access role: {st.session_state.get('viewer_role', 'unknown')}")
+    caption = f"{COMPANY_NAME} · UK retail & distribution  \nAll values in GBP (£) · v{__version__}  \n" \
+              f"Access: {access.TIER_LABELS[tier]}"
+    if tier >= Tier.DEVELOPER:
+        caption += f" · role {role} · {identity['mode']} connection"
+    st.caption(caption)
 
-page.run()
+# Error boundary: a failing page shows a business message, never a stack trace
+# (developers also get the technical detail). st.rerun/st.stop are BaseExceptions.
+try:
+    page.run()
+    quality.footer()
+except connection.DataAccessDenied as exc:
+    st.error(connection.DENIED_MESSAGE, icon=":material/lock:")
+    if tier >= Tier.DEVELOPER:
+        st.code(exc.detail)
+except access.AccessDenied as exc:
+    st.warning(str(exc), icon=":material/lock:")
+except Exception as exc:  # noqa: BLE001
+    st.error("This page couldn't be loaded. Try again, or clear filters. If it keeps happening, "
+             "contact the Inventory 360 administrator.", icon=":material/error:")
+    if tier >= Tier.DEVELOPER:
+        st.exception(exc)

@@ -2,6 +2,11 @@
 
 The connection mode is chosen from the environment, in this order:
 
+0. ``callers`` - Streamlit in Snowflake (container runtime) with a viewer token: every
+   read and write runs with **restricted caller's rights** as the viewer's default
+   role, so Snowflake RBAC (and the CALLER grants on the app owner) enforce access.
+   The connection is session-scoped and must be opened at the top of the entry
+   script (``init_session``) while the 2-minute viewer token is valid.
 1. ``spcs``  - running in Snowpark Container Services: Snowflake mounts an OAuth
    token at ``/snowflake/session/token`` and sets ``SNOWFLAKE_HOST`` /
    ``SNOWFLAKE_ACCOUNT``. No secrets are stored in the image.
@@ -24,9 +29,37 @@ import streamlit as st
 from inventory360.utils.config import DATABASE, WAREHOUSE
 
 SPCS_TOKEN_PATH = Path(os.getenv("SNOWFLAKE_TOKEN_PATH", "/snowflake/session/token"))
+CALLER_TOKEN_HEADER = "Sf-Context-Current-User-Token"
+
+# Snowflake error codes meaning "no privilege / object not visible to this role"
+_DENIED_CODES = {2003, 3001, 3041, 3540}
+_DENIED_TEXT = ("insufficient privileges", "does not exist or not authorized", "not authorized")
+DENIED_MESSAGE = ("You don't have access to this information. "
+                  "Contact the Inventory 360 administrator to request access.")
+
+
+class DataAccessDenied(PermissionError):
+    """Snowflake refused a statement for the current role (caller's rights)."""
+
+    def __init__(self, detail: str):
+        super().__init__(DENIED_MESSAGE)
+        self.detail = detail
+
+
+def _callers_rights_available() -> bool:
+    if os.getenv("INV360_CALLERS_RIGHTS", "true").lower() in {"0", "false", "no"}:
+        return False
+    if not (os.getenv("SNOWFLAKE_HOST") and SPCS_TOKEN_PATH.is_file()):
+        return False
+    try:
+        return CALLER_TOKEN_HEADER in st.context.headers
+    except Exception:  # noqa: BLE001 - no script context (tests, threads)
+        return False
 
 
 def connection_mode() -> str:
+    if _callers_rights_available():
+        return "callers"
     if SPCS_TOKEN_PATH.is_file() and os.getenv("SNOWFLAKE_HOST"):
         return "spcs"
     if os.getenv("SNOWFLAKE_DEFAULT_CONNECTION_NAME"):
@@ -80,8 +113,16 @@ def _env_connection():
     return st.connection("env", type="snowflake", **params)
 
 
+def _callers_connection():
+    # st.connection caches caller's-rights connections per session (scope="session"),
+    # so every call in a session returns the connection opened by init_session().
+    return st.connection("snowflake-callers-rights", **_context())
+
+
 def get_connection():
     mode = connection_mode()
+    if mode == "callers":
+        return _callers_connection()
     if mode == "spcs":
         return _spcs_connection()
     if mode == "named":
@@ -93,9 +134,54 @@ def get_connection():
     return st.connection("snowflake")
 
 
+def init_session() -> dict:
+    """Open this session's connection and resolve who is using the app.
+
+    Call once at the top of the entry script. Secondary roles are switched off so the
+    session's privileges are exactly the primary (default) role's, matching the tier.
+    Returns ``{"mode", "role", "user", "error"}`` and caches it in session state.
+    """
+    if "inv360_identity" in st.session_state:
+        return st.session_state["inv360_identity"]
+    mode = connection_mode()
+    identity = {"mode": mode, "role": None, "user": None, "error": None}
+    try:
+        conn = get_connection()
+        cur = conn.raw_connection.cursor()
+        try:
+            if mode == "callers":
+                cur.execute("use secondary roles none")
+            cur.execute("select current_role(), current_user()")
+            role, user = cur.fetchone()
+        finally:
+            cur.close()
+        identity.update(role=str(role or "").upper() or None, user=user)
+    except Exception as exc:  # noqa: BLE001 - surfaced as an access message, fails closed
+        identity["error"] = str(exc)
+    st.session_state["inv360_identity"] = identity
+    return identity
+
+
+def is_denied(exc: BaseException) -> bool:
+    if isinstance(exc, DataAccessDenied):
+        return True
+    errno = getattr(exc, "errno", None)
+    text = str(exc).lower()
+    return errno in _DENIED_CODES or any(t in text for t in _DENIED_TEXT)
+
+
 def run_query(sql: str, params: list | None = None, ttl: int = 600) -> pd.DataFrame:
-    """Execute a read query (qmark-parameterised) and return lower-cased columns."""
-    df = get_connection().query(sql, params=params, ttl=ttl)
+    """Execute a read query (qmark-parameterised) and return lower-cased columns.
+
+    Results are cached by ``st.connection`` per (SQL, params); caller's-rights
+    connections are session-scoped, so one viewer's results never reach another.
+    """
+    try:
+        df = get_connection().query(sql, params=params, ttl=ttl, show_spinner=False)
+    except Exception as exc:
+        if is_denied(exc):
+            raise DataAccessDenied(str(exc)) from exc
+        raise
     df.columns = [c.lower() for c in df.columns]
     return _coerce_decimals(df)
 
@@ -110,5 +196,13 @@ def _coerce_decimals(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def execute(sql: str, params: list | None = None) -> None:
-    """Execute a write statement through the Snowpark session (uncached)."""
-    get_connection().session().sql(sql, params=params).collect()
+    """Execute a write statement (uncached, autocommit) on this session's connection."""
+    cur = get_connection().raw_connection.cursor()
+    try:
+        cur.execute(sql, params)
+    except Exception as exc:
+        if is_denied(exc):
+            raise DataAccessDenied(str(exc)) from exc
+        raise
+    finally:
+        cur.close()

@@ -1,8 +1,10 @@
 import pandas as pd
 import streamlit as st
 
-from components import charts, filters
+from components import charts, filters, quality
 from components.layout import download, filter_scope, kpi, num, page_header, section, table
+from inventory360.business_logic import data_quality as dq
+from inventory360.business_logic import kpi_framework as kf
 from inventory360.business_logic.exceptions import TARGETS, rag_for
 from inventory360.data_access import queries
 from inventory360.utils.formatting import fmt_int, fmt_pct
@@ -28,7 +30,24 @@ with cols[3]:
         status="Green" if data_age_days <= 1 else "Amber" if data_age_days <= 2 else "Red",
         status_text=f"{data_age_days} day(s) behind today")
 
-tab_cat, tab_lineage, tab_kpi, tab_access = st.tabs(["Catalogue & freshness", "Lineage", "KPI dictionary", "Access & audit"])
+tab_cat, tab_dq, tab_lineage, tab_kpi, tab_access = st.tabs(
+    ["Catalogue & freshness", "Data quality", "Lineage", "KPI dictionary", "Access & audit"])
+
+with tab_dq:
+    checks = quality.run_checks()
+    frame = dq.to_frame(checks)
+    c = st.columns(4)
+    for col, area in zip(c, ["Freshness", "Completeness", "Uniqueness", "Volume"]):
+        part = [x for x in checks if x.area == area]
+        with col:
+            kpi(area, f"{sum(x.status == 'Green' for x in part)} / {len(part)} passing", status=dq.overall(part))
+    with section("Live checks", "Evaluated on demand against the marts (cached 10 min). Nothing is persisted."):
+        table(frame, key="gov_dq", select=False, rag_cols=["status"], alt="Data quality checks", csv_name="data quality",
+              column_config={"area": "Area", "name": "Check", "status": "Status",
+                             "detail": st.column_config.TextColumn("Result", width="large")})
+    st.caption("'Latest data loaded' is the newest business date present. 'Model last rebuilt' is the table's "
+               "LAST_ALTERED time. There is no orchestration log, so refresh success is not reported. Volume: a day "
+               f"with more than {dq.DAY_DROP_AMBER:.0%} fewer rows than the 28-day median counts as incomplete.")
 
 with tab_cat:
     with st.container(horizontal=True, vertical_alignment="bottom"):
@@ -121,18 +140,24 @@ with tab_kpi:
         "freshness_hours": "Hours since the object last changed",
     }
     kpis = pd.DataFrame([{"KPI": t.label, "Definition": defs.get(k, ""), "RAG bands": fmt_target(t)} for k, t in TARGETS.items()])
+    extra = [{"KPI": s.label, "Definition": s.definition,
+              "RAG bands": "Green ≥ comparison period · amber within 2% · red beyond" if s.target_vs_previous is not None
+              else "Trend only (no target)"} for k, s in kf.KPIS.items() if k not in TARGETS]
+    kpis = pd.concat([kpis, pd.DataFrame(extra)], ignore_index=True)
     table(kpis, key="gov_kpis", select=False, alt="KPI dictionary", csv_name="kpi dictionary",
           column_config={"Definition": st.column_config.TextColumn(width="large"),
                          "RAG bands": st.column_config.TextColumn(width="large")})
 
 with tab_access:
     roles = pd.DataFrame([
-        ("INV360_VIEWER", "Management, finance", "Read MARTS and app"),
-        ("INV360_PLANNER", "Supply and replenishment planners", "Viewer + submit replenishment orders"),
-        ("INV360_ENGINEER", "Data engineering", "Planner + build RAW / STAGING / MARTS"),
-        ("INV360_ADMIN", "Platform owner", "Engineer + app deployment, warehouse administration"),
-    ], columns=["Role", "Persona", "Capability"])
+        ("INV360_VIEWER", "Viewer", "Management, finance", "Read MARTS and app, CSV export"),
+        ("INV360_PLANNER", "Planner", "Supply and replenishment planners", "Viewer + submit replenishment orders"),
+        ("INV360_ENGINEER", "Developer", "Data engineering", "Planner + build RAW / STAGING / MARTS, this page"),
+        ("INV360_ADMIN", "Developer", "Platform owner", "Engineer + app ownership and deployment"),
+    ], columns=["Role", "App tier", "Persona", "Capability"])
     st.dataframe(roles, hide_index=True, alt="Role-based access model")
+    st.caption("The app runs with restricted caller's rights: every query uses the viewer's DEFAULT role, limited "
+               "to the CALLER grants held by INV360_ADMIN (sql/roles/02_callers_rights.sql). Snowflake enforces access.")
     with section("Audit log", "Most recent 500 application events"):
         audit = queries.load_audit_log()
         if audit.empty:
