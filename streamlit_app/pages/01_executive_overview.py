@@ -19,8 +19,6 @@ as_of = st.session_state["gf_as_of"]
 page_header("Executive overview", "Network-wide sales, inventory, availability and exceptions", f, as_of)
 filter_scope(f, CUSTOMER_COLS, note="customer filter applies to sales KPIs; inventory KPIs cover all customers")
 
-grain = st.segmented_control("Trend granularity", ["Daily", "Weekly", "Monthly"], default="Weekly", key="exec_grain",
-                             required=True, help="Applies to the stock and sales trend charts below.")
 
 # --------------------------------------------------------------------------- #
 # Data
@@ -45,11 +43,17 @@ s_prev = _sales_window(pd.Timestamp(prior.start), pd.Timestamp(prior.end))
 lost_share = s_cur["lost"] / (s_cur["net"] + s_cur["lost"]) if s_cur["net"] else None
 
 inv_cur = inv[inv["snapshot_date"].between(cur_s, cur_e)]
-trend = bucket(inv_cur, "snapshot_date", grain,
-               sums=["net_sales_gbp", "cogs_gbp", "lost_sales_gbp", "sku_locations", "sku_locations_oos"],
-               means=["stock_value_gbp"])
-trend["availability"] = 1 - trend["sku_locations_oos"] / trend["sku_locations"]
-spark = trend.tail(26)
+TREND_SUMS = ["net_sales_gbp", "cogs_gbp", "lost_sales_gbp", "sku_locations", "sku_locations_oos"]
+
+
+def _trend(grain: str) -> pd.DataFrame:
+    t = bucket(inv_cur, "snapshot_date", grain, sums=TREND_SUMS, means=["stock_value_gbp"])
+    t["availability"] = 1 - t["sku_locations_oos"] / t["sku_locations"]
+    return t
+
+
+# KPI-card sparklines are always weekly; the granularity toggle only drives the trend charts
+spark = _trend("Weekly").tail(26)
 
 position = queries.inventory_position(f)
 scorecard = queries.load_supplier_scorecard()
@@ -173,6 +177,12 @@ with st.container(horizontal=True, gap="small", vertical_alignment="center"):
 # --------------------------------------------------------------------------- #
 # Trends
 # --------------------------------------------------------------------------- #
+head, ctl = st.columns([3, 2], vertical_alignment="bottom")
+head.subheader("Trends")
+grain = ctl.segmented_control("Trend granularity", ["Daily", "Weekly", "Monthly"], default="Weekly", key="exec_grain",
+                              required=True, help="Groups the stock and sales trend charts below by day, week or month.")
+trend = _trend(grain)
+
 left, right = st.columns([2, 1])
 with left:
     with section("Stock investment vs availability", f"{grain} average stock value (bars) and on-shelf availability (line)"):
