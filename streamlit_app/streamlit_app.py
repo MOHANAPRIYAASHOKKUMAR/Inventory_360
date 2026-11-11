@@ -31,21 +31,25 @@ st.set_page_config(
 st.logo(str(APP_DIR / "assets" / "logo.svg"), icon_image=str(APP_DIR / "assets" / "icon.svg"), size="large")
 
 
+PLATFORM_ROLES = {"INV360_PLANNER", "INV360_ENGINEER", "INV360_ADMIN", "SYSADMIN", "ACCOUNTADMIN"}
+
+
 def _can_view_platform() -> bool:
     """Data & governance is hidden from read-only viewers (INV360_VIEWER).
 
     The app itself runs with owner's rights, so the viewer's role is read through a
-    restricted caller's-rights connection (container runtime only; it uses the
-    viewer's default role). Locally the developer's own connection is checked.
-    INV360_PLANNER is inherited by every role above it, so the page shows for
-    planners, engineers, admins, SYSADMIN and ACCOUNTADMIN. Fails closed.
+    restricted caller's-rights connection (container runtime only). Only the PRIMARY
+    role is checked: CURRENT_ROLE() is the viewer's default role. IS_ROLE_IN_SESSION
+    is not used because DEFAULT_SECONDARY_ROLES = ('ALL') would activate every
+    granted role. Locally the developer's own connection is checked. Fails closed.
     """
     if "can_view_platform" not in st.session_state:
         try:
             conn = (st.connection("snowflake-callers-rights") if os.getenv("SNOWFLAKE_HOST")
                     else connection.get_connection())
-            df = conn.query("select is_role_in_session('INV360_PLANNER') as ok", ttl=0)
-            st.session_state["can_view_platform"] = bool(df.iloc[0, 0])
+            role = str(conn.query("select current_role() as r", ttl=0).iloc[0, 0]).upper()
+            st.session_state["viewer_role"] = role
+            st.session_state["can_view_platform"] = role in PLATFORM_ROLES
         except Exception:  # noqa: BLE001 - any failure means no access
             st.session_state["can_view_platform"] = False
     return st.session_state["can_view_platform"]
@@ -92,6 +96,7 @@ st.session_state["gf_as_of"] = hi
 
 with st.sidebar:
     st.divider()
-    st.caption(f"{COMPANY_NAME} · UK retail & distribution  \nAll values in GBP (£) · v{__version__}")
+    st.caption(f"{COMPANY_NAME} · UK retail & distribution  \nAll values in GBP (£) · v{__version__}  \n"
+               f"Access role: {st.session_state.get('viewer_role', 'unknown')}")
 
 page.run()
