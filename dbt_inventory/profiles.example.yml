@@ -20,6 +20,7 @@ inventory_360:
       user: "{{ env_var('SNOWFLAKE_USER') }}"
       authenticator: snowflake_jwt
       private_key: "{{ env_var('SNOWFLAKE_PRIVATE_KEY') }}"
+      private_key_passphrase: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PASSPHRASE') }}"
       role: INV360_ENGINEER
       warehouse: INV360_WH
       database: INVENTORY_360_DB

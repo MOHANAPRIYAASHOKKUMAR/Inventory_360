@@ -5,18 +5,21 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   python:
     name: Lint and unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
-        run: pip install "streamlit[snowflake]==1.67.0" snowflake-snowpark-python pandas numpy altair pytest ruff pyyaml jinja2
+        run: pip install -r requirements.txt pytest ruff pyyaml jinja2
       - name: Ruff
         run: ruff check src streamlit_app tests scripts
       - name: Pytest
@@ -26,12 +29,12 @@ jobs:
     name: dbt parse and render check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
       - name: Install dbt
-        run: pip install dbt-snowflake pyyaml jinja2
+        run: pip install dbt-core==1.12.6 dbt-snowflake==1.12.5 pyyaml jinja2
       - name: dbt parse (no warehouse connection)
         working-directory: dbt_inventory
         env:

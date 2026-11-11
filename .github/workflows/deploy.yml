@@ -1,10 +1,12 @@
 name: Deploy
 
 # Manual deployment of dbt models and the Streamlit app.
-# Required repository secrets:
-#   SNOWFLAKE_ACCOUNT      e.g. TBSLJYV-RM91730
-#   SNOWFLAKE_USER         service user with key-pair auth
-#   SNOWFLAKE_PRIVATE_KEY  PEM private key (unencrypted) for that user
+# Required repository secrets (environment: production):
+#   SNOWFLAKE_ACCOUNT                   e.g. TBSLJYV-RM91730
+#   SNOWFLAKE_USER                      service user (TYPE = SERVICE) with key-pair auth,
+#                                       granted INV360_ADMIN (app owner, holds the caller grants)
+#   SNOWFLAKE_PRIVATE_KEY               encrypted PEM private key for that user
+#   SNOWFLAKE_PRIVATE_KEY_PASSPHRASE    passphrase for the key
 on:
   workflow_dispatch:
     inputs:
@@ -12,6 +14,9 @@ on:
         description: Run dbt build before deploying the app
         type: boolean
         default: true
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
@@ -21,13 +26,23 @@ jobs:
       SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
       SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
       SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+      PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+      SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+      APP_FQN: INVENTORY_360_DB.APP.INVENTORY_360
+      OWNER_ROLE: INV360_ADMIN
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
       - name: Install tooling
-        run: pip install dbt-snowflake snowflake-cli
+        run: pip install dbt-core==1.12.6 dbt-snowflake==1.12.5 snowflake-cli==3.16.0
+
+      - name: Write private key (owner-only, removed at the end)
+        run: |
+          umask 077
+          printf '%s\n' "$SNOWFLAKE_PRIVATE_KEY" > "$RUNNER_TEMP/rsa_key.p8"
+          echo "KEY_FILE=$RUNNER_TEMP/rsa_key.p8" >> "$GITHUB_ENV"
 
       - name: dbt build
         if: ${{ inputs.deploy_dbt }}
@@ -38,13 +53,26 @@ jobs:
 
       - name: Configure Snowflake CLI
         run: |
-          echo "$SNOWFLAKE_PRIVATE_KEY" > /tmp/rsa_key.p8
           snow connection add --connection-name ci --account "$SNOWFLAKE_ACCOUNT" --user "$SNOWFLAKE_USER" \
-            --authenticator SNOWFLAKE_JWT --private-key /tmp/rsa_key.p8 --role SYSADMIN \
+            --authenticator SNOWFLAKE_JWT --private-key "$KEY_FILE" --role "$OWNER_ROLE" \
             --warehouse INV360_WH --database INVENTORY_360_DB --schema APP --no-interactive
 
+      # Same steps as scripts/deploy_streamlit.ps1: the app must be owned by INV360_ADMIN,
+      # which holds the CALLER grants (sql/roles/02_callers_rights.sql)
       - name: Deploy Streamlit app
-        run: snow streamlit deploy inventory_360 --connection ci --replace
+        run: snow streamlit deploy inventory_360 --connection ci --role "$OWNER_ROLE" --replace
+
+      - name: Grant usage and attach PyPI repository
+        run: |
+          for role in INV360_PLANNER INV360_VIEWER; do
+            snow sql --connection ci --role "$OWNER_ROLE" -q "GRANT USAGE ON STREAMLIT $APP_FQN TO ROLE $role"
+          done
+          snow sql --connection ci --role "$OWNER_ROLE" \
+            -q "ALTER STREAMLIT $APP_FQN SET ARTIFACT_REPOSITORIES = (snowflake.snowpark.pypi_shared_repository)"
 
       - name: Verify
-        run: snow sql --connection ci -q "SHOW STREAMLITS LIKE 'INVENTORY_360' IN SCHEMA INVENTORY_360_DB.APP"
+        run: snow sql --connection ci --role "$OWNER_ROLE" -q "SHOW STREAMLITS LIKE 'INVENTORY_360' IN SCHEMA INVENTORY_360_DB.APP"
+
+      - name: Remove private key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/rsa_key.p8"
