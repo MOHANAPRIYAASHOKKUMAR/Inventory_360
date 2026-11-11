@@ -13,6 +13,7 @@ import pandas as pd
 
 from inventory360.data_access.connection import execute, run_query
 from inventory360.data_access.filters import GlobalFilters, build_where, product_scope
+from inventory360.utils import access
 from inventory360.utils.config import APP_SCHEMA, DATABASE, MARTS, STAGING, TTL_OPERATIONAL, TTL_REFERENCE
 
 # Filter dimensions supported by each source (dimension -> column)
@@ -95,8 +96,8 @@ def inventory_daily(f: GlobalFilters, *, with_prior: bool = True) -> pd.DataFram
 
 
 def inventory_breakdown(f: GlobalFilters, dims: tuple[str, ...] = ("category",)) -> pd.DataFrame:
-    """Window KPIs grouped by category and/or warehouse_code."""
-    allowed = {"category", "warehouse_code"}
+    """Window KPIs grouped by category, warehouse_code and/or sku."""
+    allowed = {"category", "warehouse_code", "sku"}
     if not set(dims) <= allowed:
         raise ValueError(f"dims must be within {allowed}")
     where, params = build_where(f, INVENTORY_COLS, _scope(f))
@@ -415,6 +416,57 @@ def load_audit_log(limit: int = 500) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------- #
+# Live data-quality checks (run as the caller; cached 10 min)
+# --------------------------------------------------------------------------- #
+DQ_SOURCES = {  # display name -> (table, business date column, grain key columns)
+    "Inventory snapshots": ("FCT_INVENTORY_DAILY", "snapshot_date", ("snapshot_date", "warehouse_code", "sku")),
+    "Customer sales": ("FCT_CUSTOMER_SALES_DAILY", "sales_date", ("sales_date", "customer_id", "warehouse_code", "sku")),
+    "Purchase orders": ("FCT_PURCHASE_ORDERS", "order_date", ("po_number", "sku", "warehouse_code")),
+}
+
+
+def dq_latest_dates() -> dict:
+    parts = [f"select '{name}' as source, max({col}) as d from {MARTS}.{table} where {col} <= current_date()"
+             for name, (table, col, _) in DQ_SOURCES.items()]
+    df = run_query(" union all ".join(parts), ttl=TTL_OPERATIONAL)
+    return {r.source: (None if pd.isna(r.d) else pd.Timestamp(r.d).date()) for r in df.itertuples()}
+
+
+def dq_key_checks() -> tuple[dict, dict]:
+    """(null-key rows, duplicate-grain rows) per source, over the last 35 days."""
+    parts = []
+    for name, (table, col, keys) in DQ_SOURCES.items():
+        nulls = " or ".join(f"{k} is null" for k in keys)
+        key_list = ", ".join(keys)
+        parts.append(
+            f"select '{name}' as source, count_if({nulls}) as nulls, "
+            f"count(*) - (select count(*) from (select distinct {key_list} from {MARTS}.{table} "
+            f"where {col} >= dateadd(day, -35, current_date()))) as dupes "
+            f"from {MARTS}.{table} where {col} >= dateadd(day, -35, current_date())"
+        )
+    df = run_query(" union all ".join(parts), ttl=TTL_OPERATIONAL)
+    return (dict(zip(df["source"], df["nulls"].astype(int))), dict(zip(df["source"], df["dupes"].astype(int))))
+
+
+def dq_daily_counts(source: str) -> pd.DataFrame:
+    table, col, _ = DQ_SOURCES[source]
+    return _dates(run_query(
+        f"select {col} as d, count(*) as n from {MARTS}.{table} "
+        f"where {col} between dateadd(day, -35, current_date()) and current_date() group by 1 order by 1",
+        ttl=TTL_OPERATIONAL), "d")
+
+
+def dq_last_altered() -> dict:
+    tables = [t for t, _, _ in DQ_SOURCES.values()]
+    df = run_query(
+        f"select table_name, last_altered from {DATABASE}.information_schema.tables "
+        f"where table_schema = 'MARTS' and table_name in ({', '.join('?' * len(tables))})",
+        params=tables, ttl=TTL_OPERATIONAL)
+    names = {t: n for n, (t, _, _) in DQ_SOURCES.items()}
+    return {names[r.table_name]: r.last_altered for r in df.itertuples()}
+
+
+# --------------------------------------------------------------------------- #
 # Replenishment write-back
 # --------------------------------------------------------------------------- #
 def load_replenishment_requests() -> pd.DataFrame:
@@ -428,6 +480,8 @@ def submit_replenishment_requests(lines: pd.DataFrame, note: str) -> int:
     """Insert approved order lines in one batched statement; returns rows written."""
     if lines.empty:
         return 0
+    # UI gate; Snowflake also rejects the INSERT for roles without the privilege
+    access.require(access.Tier.PLANNER, "Submitting replenishment orders")
     placeholders = ", ".join(["(?, ?, ?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', ?)"] * len(lines))
     params: list = []
     for row in lines.itertuples(index=False):

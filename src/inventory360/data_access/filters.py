@@ -13,10 +13,11 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-# Display order and labels for the six global dimensions
-DIMENSIONS = ("date", "warehouse", "category", "supplier", "product", "customer")
+# Display order and labels for the global dimensions
+DIMENSIONS = ("date", "region", "warehouse", "category", "supplier", "product", "customer")
 LABELS = {
     "date": "Date range",
+    "region": "Region",
     "warehouse": "Warehouse",
     "category": "Category",
     "supplier": "Supplier",
@@ -36,6 +37,9 @@ class GlobalFilters:
     suppliers: tuple[str, ...] = ()
     skus: tuple[str, ...] = ()
     customers: tuple[str, ...] = ()
+    # Warehouse regions (UK region of the site). The UI resolves regions into
+    # ``warehouses``, so SQL push-down only ever filters on warehouse codes.
+    regions: tuple[str, ...] = ()
 
     @property
     def days(self) -> int:
@@ -48,6 +52,7 @@ class GlobalFilters:
 
     def selection(self, dimension: str) -> tuple[str, ...]:
         return {
+            "region": self.regions,
             "warehouse": self.warehouses,
             "category": self.categories,
             "supplier": self.suppliers,
@@ -123,9 +128,25 @@ def applicability(f: GlobalFilters, columns: Mapping[str, str], *, use_date: boo
     if use_date and "date" in columns:
         applied.append(LABELS["date"])
     for dim in f.active():
-        supported = dim in columns or (dim in PRODUCT_DIMENSIONS and "product" in columns)
+        supported = (dim in columns or (dim in PRODUCT_DIMENSIONS and "product" in columns)
+                     or (dim == "region" and "warehouse" in columns))
         (applied if supported else ignored).append(LABELS[dim])
     return applied, ignored
+
+
+def resolve_regions(warehouses: pd.DataFrame, regions: Iterable[str], selected: Iterable[str]) -> tuple[str, ...]:
+    """Effective warehouse codes: the explicit selection, narrowed to the chosen regions.
+
+    No regions -> the selection unchanged. Regions but no explicit warehouses -> every
+    warehouse in those regions. Both -> the intersection.
+    """
+    regions, selected = tuple(regions), tuple(selected)
+    if not regions:
+        return selected
+    in_region = warehouses.loc[warehouses["uk_region"].isin(regions), "warehouse_code"].tolist()
+    if not selected:
+        return tuple(sorted(in_region))
+    return tuple(c for c in selected if c in set(in_region))
 
 
 def apply_frame(df: pd.DataFrame, f: GlobalFilters, columns: Mapping[str, str],

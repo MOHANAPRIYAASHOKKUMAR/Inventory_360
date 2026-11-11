@@ -1,9 +1,11 @@
 import pandas as pd
 import streamlit as st
 
-from components import charts, filters
+from components import charts, drilldown, filters
 from components.layout import download, filter_scope, gbp, kpi, num, page_header, pct, rag_badge, section, table
 from inventory360.analytics.kpis import bucket, period_kpis
+from inventory360.business_logic import insights
+from inventory360.business_logic import kpi_framework as kf
 from inventory360.business_logic.budget import full_year_outturn
 from inventory360.business_logic.exceptions import TARGETS, rag_for
 from inventory360.business_logic.replenishment import status_summary
@@ -48,6 +50,71 @@ trend = bucket(inv_cur, "snapshot_date", grain,
 trend["availability"] = 1 - trend["sku_locations_oos"] / trend["sku_locations"]
 spark = trend.tail(26)
 
+position = queries.inventory_position(f)
+scorecard = queries.load_supplier_scorecard()
+if f.suppliers:
+    scorecard = scorecard[scorecard["supplier_id"].isin(f.suppliers)]
+bva = queries.load_budget_vs_actual()
+fy = bva.loc[bva["period_month"] <= as_of, "fiscal_year"].max()
+outturn = full_year_outturn(bva, fy)
+ytd_var_pct = outturn["ytd_variance_gbp"].sum() / outturn["budget_ytd_gbp"].sum()
+in_flight = queries.shipments_open(f)
+overdue = in_flight[(in_flight["planned_arrival"] < as_of) & (in_flight["shipment_status"] == "IN_TRANSIT")]
+p1 = position[position["replenishment_priority"] == "P1 - Urgent"]
+high_risk = scorecard[scorecard["risk_rating"] == "High"]
+
+# --------------------------------------------------------------------------- #
+# Executive insights (rule-based, ranked by severity then GBP impact)
+# --------------------------------------------------------------------------- #
+period_label = f"{f.start:%d %b} – {f.end:%d %b %Y}"
+results = [
+    kf.evaluate("availability", cur.availability, prev.availability),
+    kf.evaluate("fill_rate", s_cur["fill"], s_prev["fill"]),
+    kf.evaluate("gross_margin", s_cur["gm"], s_prev["gm"]),
+    kf.evaluate("lost_sales_share", lost_share),
+    kf.evaluate("stock_turns", cur.stock_turns, prev.stock_turns),
+    kf.evaluate("days_cover", cur.days_cover, prev.days_cover),
+    kf.evaluate("net_sales", s_cur["net"], s_prev["net"]),
+    kf.evaluate("budget_variance", abs(ytd_var_pct) if ytd_var_pct == ytd_var_pct else None),
+]
+stock_value = position["stock_value_gbp"].sum()
+facts = {
+    "p1_lines": len(p1), "p1_value": p1["recommended_order_value_gbp"].sum(),
+    "excess_value": position["excess_stock_value_gbp"].sum(),
+    "excess_share": position["excess_stock_value_gbp"].sum() / stock_value if stock_value else None,
+    "overdue_shipments": len(overdue), "open_shipments": len(in_flight),
+    "high_risk_suppliers": len(high_risk), "high_risk_spend": high_risk["spend_gbp"].sum(),
+    "lost_sales": s_cur["lost"], "lost_sales_prev": s_prev["lost"],
+}
+impacts = {"lost_sales_share": s_cur["lost"], "availability": s_cur["lost"],
+           "budget_variance": abs(outturn["ytd_variance_gbp"].sum()), "net_sales": abs(s_cur["net"] - s_prev["net"])}
+found = insights.build(results, facts, period_label, impacts)
+
+
+def _insight_card(i: insights.Insight, idx: int) -> None:
+    with st.container(border=True, height="stretch", gap="small"):
+        rag_badge(i.severity, i.period)
+        st.markdown(f"**{i.title}**")
+        st.caption(i.detail)
+        if drilldown.available(i.metric) and st.button("Explore", key=f"ins_{idx}", icon=":material/zoom_in:",
+                                                       type="tertiary"):
+            drilldown.open_for(i.metric, f)
+
+
+with section("Executive insights", f"{len(found)} items need attention · ranked by severity, then £ impact"
+             if found else "Nothing needs attention: every KPI is on target and stable"):
+    for start in range(0, min(len(found), 6), 3):
+        cols = st.columns(3)
+        for col, (idx, item) in zip(cols, list(enumerate(found))[start:start + 3]):
+            with col:
+                _insight_card(item, idx)
+    if len(found) > 6:
+        with st.expander(f"{len(found) - 6} more"):
+            for idx, item in list(enumerate(found))[6:]:
+                _insight_card(item, idx)
+    if found:
+        download(pd.DataFrame([vars(i) for i in found]).drop(columns="tags"), "executive insights", key="dl_insights")
+
 # --------------------------------------------------------------------------- #
 # KPI cards
 # --------------------------------------------------------------------------- #
@@ -65,7 +132,7 @@ with row[0]:
         spark=spark["net_sales_gbp"], help="Net sales to customers in the selected period.")
 with row[1]:
     kpi("Gross margin", fmt_pct(s_cur["gm"]), current=s_cur["gm"], previous=s_prev["gm"], points=True,
-        status=statuses["gross_margin"], status_text=f"Target ≥ {fmt_pct(TARGETS['gross_margin'].green, 0)}")
+        status=statuses["gross_margin"], status_text=f"Target ≥ {fmt_pct(TARGETS['gross_margin'].green, 0)}", key="gross_margin")
 with row[2]:
     kpi("Stock value at cost", fmt_gbp(cur.closing_stock_value_gbp), current=cur.closing_stock_value_gbp,
         previous=prev.closing_stock_value_gbp, inverse=True, spark=spark["stock_value_gbp"],
@@ -73,7 +140,7 @@ with row[2]:
 with row[3]:
     kpi("On-shelf availability", fmt_pct(cur.availability), current=cur.availability, previous=prev.availability,
         points=True, spark=spark["availability"], status=statuses["availability"],
-        status_text=f"Target ≥ {fmt_pct(TARGETS['availability'].green, 0)}")
+        status_text=f"Target ≥ {fmt_pct(TARGETS['availability'].green, 0)}", key="availability")
 
 row = st.columns(4)
 with row[0]:
@@ -86,16 +153,25 @@ with row[1]:
         help="Unfulfilled demand valued at retail price.")
 with row[2]:
     kpi("Stock turn (annualised)", f"{cur.stock_turns:.1f}x" if cur.stock_turns else "–", current=cur.stock_turns,
-        previous=prev.stock_turns, status=statuses["stock_turns"], status_text=f"Target ≥ {TARGETS['stock_turns'].green:.0f}x")
+        previous=prev.stock_turns, status=statuses["stock_turns"], status_text=f"Target ≥ {TARGETS['stock_turns'].green:.0f}x",
+        key="stock_turns")
 with row[3]:
     kpi("Days of cover", fmt_days(cur.days_cover), current=cur.days_cover, previous=prev.days_cover, inverse=True,
         status=statuses["days_cover"], status_text=f"Target ≤ {TARGETS['days_cover'].green:.0f} days",
         help="Closing stock value ÷ average daily cost of sales.")
 
+DRILLS = [("net_sales", "Net sales"), ("gross_margin", "Gross margin"), ("availability", "Availability"),
+          ("fill_rate", "Fill rate"), ("lost_sales", "Lost sales"), ("stock_turns", "Stock turn"),
+          ("excess_value", "Excess stock")]
+with st.container(horizontal=True, gap="small", vertical_alignment="center"):
+    st.caption("Drill down by region, warehouse, category, SKU or customer:")
+    for drill_key, drill_label in DRILLS:
+        if st.button(drill_label, key=f"drill_{drill_key}", type="tertiary", icon=":material/zoom_in:"):
+            drilldown.open_for(drill_key, f)
+
 # --------------------------------------------------------------------------- #
 # Trends
 # --------------------------------------------------------------------------- #
-position = queries.inventory_position(f)
 left, right = st.columns([2, 1])
 with left:
     with section("Stock investment vs availability", f"{grain} average stock value (bars) and on-shelf availability (line)"):
@@ -134,18 +210,6 @@ with right:
 # --------------------------------------------------------------------------- #
 # Management attention
 # --------------------------------------------------------------------------- #
-scorecard = queries.load_supplier_scorecard()
-if f.suppliers:
-    scorecard = scorecard[scorecard["supplier_id"].isin(f.suppliers)]
-bva = queries.load_budget_vs_actual()
-fy = bva.loc[bva["period_month"] <= as_of, "fiscal_year"].max()
-outturn = full_year_outturn(bva, fy)
-ytd_var_pct = outturn["ytd_variance_gbp"].sum() / outturn["budget_ytd_gbp"].sum()
-in_flight = queries.shipments_open(f)
-overdue = in_flight[(in_flight["planned_arrival"] < as_of) & (in_flight["shipment_status"] == "IN_TRANSIT")]
-p1 = position[position["replenishment_priority"] == "P1 - Urgent"]
-high_risk = scorecard[scorecard["risk_rating"] == "High"]
-
 st.subheader("Management attention", anchor=False)
 cards = st.columns(4)
 attention = [

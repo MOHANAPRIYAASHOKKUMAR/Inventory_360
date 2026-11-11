@@ -27,6 +27,8 @@ entities:
       - streamlit_app/components/layout.py
       - streamlit_app/components/charts.py
       - streamlit_app/components/filters.py
+      - streamlit_app/components/drilldown.py
+      - streamlit_app/components/quality.py
       - streamlit_app/pages/01_executive_overview.py
       - streamlit_app/pages/02_inventory_health.py
       - streamlit_app/pages/03_replenishment.py
@@ -41,6 +43,7 @@ entities:
       - src/inventory360/utils/__init__.py
       - src/inventory360/utils/config.py
       - src/inventory360/utils/formatting.py
+      - src/inventory360/utils/access.py
       - src/inventory360/data_access/__init__.py
       - src/inventory360/data_access/connection.py
       - src/inventory360/data_access/queries.py
@@ -50,6 +53,9 @@ entities:
       - src/inventory360/business_logic/supplier.py
       - src/inventory360/business_logic/budget.py
       - src/inventory360/business_logic/exceptions.py
+      - src/inventory360/business_logic/kpi_framework.py
+      - src/inventory360/business_logic/insights.py
+      - src/inventory360/business_logic/data_quality.py
       - src/inventory360/analytics/__init__.py
       - src/inventory360/analytics/abc.py
       - src/inventory360/analytics/forecasting.py
