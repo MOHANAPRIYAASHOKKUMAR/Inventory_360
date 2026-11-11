@@ -32,3 +32,4 @@ output/
 .idea/
 .DS_Store
 Thumbs.db
+dbt_inventory/profiles.yml
