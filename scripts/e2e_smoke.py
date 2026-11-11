@@ -368,6 +368,24 @@ def section_security() -> None:
     record("security", "planner INSERT allowed (rolled back)", p.returncode == 0, p.stderr.strip()[-120:])
     r = snow_sql("select count(*) as n from INVENTORY_360_DB.MARTS.FCT_INVENTORY_DAILY", role="INV360_VIEWER")
     record("security", "viewer can read marts", r.returncode == 0)
+
+    def denied(res: subprocess.CompletedProcess) -> bool:
+        return res.returncode != 0 and any(t in (res.stdout + res.stderr).lower()
+                                           for t in ("privilege", "not authorized", "does not exist"))
+
+    w = snow_sql("use secondary roles none; alter warehouse INV360_WH suspend", role="INV360_VIEWER")
+    record("security", "viewer cannot suspend the warehouse (no OPERATE)", denied(w))
+    u = snow_sql("use secondary roles none; begin; update INVENTORY_360_DB.APP.REPLENISHMENT_REQUESTS "
+                 "set status = 'APPROVED' where 1 = 0; rollback;", role="INV360_PLANNER")
+    record("security", "planner cannot UPDATE orders (status change)", denied(u))
+    a = snow_sql("use secondary roles none; begin; update INVENTORY_360_DB.APP.APP_AUDIT_LOG "
+                 "set event_type = 'X' where 1 = 0; rollback;", role="INV360_PLANNER")
+    record("security", "planner cannot UPDATE the audit log", denied(a))
+    v = snow_sql("use secondary roles none; select count(*) from INVENTORY_360_DB.APP.APP_AUDIT_LOG", role="INV360_VIEWER")
+    record("security", "viewer cannot read the audit log", denied(v))
+    o = snow_sql("use secondary roles none; select count(*) from INVENTORY_360_DB.APP.V_REPLENISHMENT_OUTBOX",
+                 role="INV360_VIEWER")
+    record("security", "viewer can read the outbox view", o.returncode == 0, o.stderr.strip()[-120:])
     g = snow_sql("show caller grants to role INV360_ADMIN", role="ACCOUNTADMIN")
     record("security", "caller grants present on app owner", g.returncode == 0 and "INSERT" in g.stdout and "SELECT" in g.stdout)
     s = snow_sql("show streamlits like 'INVENTORY_360' in schema INVENTORY_360_DB.APP", role="INV360_ADMIN")
