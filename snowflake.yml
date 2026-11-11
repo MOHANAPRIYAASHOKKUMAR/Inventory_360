@@ -11,13 +11,14 @@ entities:
     query_warehouse: INV360_WH
     runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
     compute_pool: SYSTEM_COMPUTE_POOL_CPU
-    # requirements.txt (repo root) is the dependency file: the container runtime searches
-    # upward from the entry point. Packages come from Snowflake's shared PyPI mirror
-    # (snowflake.snowpark.pypi_shared_repository), attached after deploy by
-    # scripts/deploy_streamlit.ps1 - no external access integration needed.
+    # streamlit_app/requirements.txt is the dependency file. It must sit beside the entry
+    # point: Snowflake generates streamlit_app/pyproject.toml on deploy, and requirements.txt
+    # wins over it in the same folder. Packages come from Snowflake's shared PyPI mirror
+    # (snowflake.snowpark.pypi_shared_repository), attached after every deploy by
+    # scripts/deploy_streamlit.ps1 - a --replace deploy detaches it. No EAI needed.
     main_file: streamlit_app/streamlit_app.py
     artifacts:
-      - requirements.txt
+      - streamlit_app/requirements.txt
       - streamlit_app/streamlit_app.py
       - streamlit_app/.streamlit/config.toml
       - streamlit_app/assets/logo.svg
