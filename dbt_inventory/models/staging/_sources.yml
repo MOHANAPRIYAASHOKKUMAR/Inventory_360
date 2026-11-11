@@ -38,3 +38,8 @@ sources:
         description: Monthly GL actuals for warehouse operating costs.
       - name: fin_budgets_monthly
         description: FY budget and latest forecast by area.
+      - name: erp_customers
+        description: ERP customer master - accounts served by each distribution site.
+        columns:
+          - name: customer_id
+            tests: [unique, not_null]

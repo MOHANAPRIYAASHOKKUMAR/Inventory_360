@@ -1,17 +1,46 @@
 """Read / write access to the Inventory 360 marts.
 
-Every function returns a pandas DataFrame with lower-case column names.
-Interactive filtering happens in pandas on these cached frames, so each
-query runs at most once per TTL window.
+Every read takes the global filters and pushes them down to Snowflake as
+qmark parameters, so pages receive only aggregated results. Results are cached
+by ``st.connection`` per (SQL, params) for the TTL. Column names are lower case.
 """
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pandas as pd
 
 from inventory360.data_access.connection import execute, run_query
-from inventory360.utils.config import APP_SCHEMA, MARTS, STAGING, TTL_OPERATIONAL, TTL_REFERENCE
+from inventory360.data_access.filters import GlobalFilters, build_where, product_scope
+from inventory360.utils.config import APP_SCHEMA, DATABASE, MARTS, STAGING, TTL_OPERATIONAL, TTL_REFERENCE
+
+# Filter dimensions supported by each source (dimension -> column)
+INVENTORY_COLS = {"date": "snapshot_date", "warehouse": "warehouse_code", "product": "sku", "category": "category"}
+POSITION_COLS = {"warehouse": "warehouse_code", "product": "sku", "category": "category", "supplier": "supplier_id"}
+PO_COLS = {"date": "order_date", "warehouse": "warehouse_code", "product": "sku", "category": "category",
+           "supplier": "supplier_id"}
+SHIPMENT_COLS = {"date": "dispatch_date", "warehouse": "warehouse_code", "supplier": "supplier_id"}
+UTILISATION_COLS = {"date": "period_month", "warehouse": "warehouse_code"}
+CUSTOMER_COLS = {"date": "f.sales_date", "warehouse": "f.warehouse_code", "product": "f.sku", "category": "f.category",
+                 "supplier": "f.supplier_id", "customer": "f.customer_id"}
+BUDGET_COLS = {"date": "period_month", "warehouse": "dimension_key", "category": "dimension_key"}
+
+
+def _dates(df: pd.DataFrame, *cols: str) -> pd.DataFrame:
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c])
+    return df
+
+
+def _scope(f: GlobalFilters):
+    return product_scope(load_products(), f)
+
+
+def _month_window(f: GlobalFilters) -> GlobalFilters:
+    """Monthly tables: widen the start to the first of its month."""
+    return replace(f, start=f.start.replace(day=1))
 
 
 # --------------------------------------------------------------------------- #
@@ -22,178 +51,367 @@ def load_warehouses() -> pd.DataFrame:
 
 
 def load_suppliers() -> pd.DataFrame:
-    return run_query(f"select * from {MARTS}.DIM_SUPPLIER order by supplier_id", ttl=TTL_REFERENCE)
+    return run_query(f"select * from {MARTS}.DIM_SUPPLIER order by supplier_name", ttl=TTL_REFERENCE)
 
 
 def load_products() -> pd.DataFrame:
     return run_query(f"select * from {MARTS}.DIM_PRODUCT order by sku", ttl=TTL_REFERENCE)
 
 
-def load_data_freshness() -> pd.DataFrame:
-    return run_query(
-        f"""
-        select max(snapshot_date) as as_of_date,
-               count(distinct snapshot_date) as days_loaded,
-               count(*) as fact_rows
-        from {MARTS}.FCT_INVENTORY_DAILY
-        """,
-        ttl=TTL_OPERATIONAL,
-    )
+def load_customers() -> pd.DataFrame:
+    return run_query(f"select * from {MARTS}.DIM_CUSTOMER order by customer_name", ttl=TTL_REFERENCE)
+
+
+def load_date_bounds() -> tuple[pd.Timestamp, pd.Timestamp]:
+    df = run_query(f"select min(snapshot_date) as lo, max(snapshot_date) as hi from {MARTS}.FCT_INVENTORY_DAILY",
+                   ttl=TTL_OPERATIONAL)
+    return pd.Timestamp(df["lo"].iloc[0]), pd.Timestamp(df["hi"].iloc[0])
 
 
 # --------------------------------------------------------------------------- #
 # Inventory
 # --------------------------------------------------------------------------- #
-def load_inventory_position() -> pd.DataFrame:
-    return run_query(f"select * from {MARTS}.RPT_INVENTORY_POSITION", ttl=TTL_OPERATIONAL)
-
-
-def load_inventory_kpis_monthly() -> pd.DataFrame:
-    df = run_query(f"select * from {MARTS}.RPT_INVENTORY_KPIS_MONTHLY", ttl=TTL_OPERATIONAL)
-    df["period_month"] = pd.to_datetime(df["period_month"])
-    return df
-
-
-def load_network_daily_trend() -> pd.DataFrame:
+def inventory_daily(f: GlobalFilters, *, with_prior: bool = True) -> pd.DataFrame:
+    """Network daily totals for the window (and the prior window for comparisons)."""
+    window = replace(f, start=f.prior().start) if with_prior else f
+    where, params = build_where(window, INVENTORY_COLS, _scope(f))
     df = run_query(
         f"""
         select snapshot_date,
-               warehouse_code,
-               category,
-               sum(stock_value_gbp)                 as stock_value_gbp,
-               sum(net_sales_gbp)                   as net_sales_gbp,
-               sum(cogs_gbp)                        as cogs_gbp,
-               sum(lost_sales_gbp)                  as lost_sales_gbp,
-               sum(units_demanded)                  as units_demanded,
-               sum(units_sold)                      as units_sold,
-               count(*)                             as sku_locations,
-               sum(iff(is_out_of_stock, 1, 0))      as sku_locations_oos
-        from {MARTS}.FCT_INVENTORY_DAILY
-        group by 1, 2, 3
+               sum(stock_value_gbp)            as stock_value_gbp,
+               sum(net_sales_gbp)              as net_sales_gbp,
+               sum(cogs_gbp)                   as cogs_gbp,
+               sum(lost_sales_gbp)             as lost_sales_gbp,
+               sum(units_demanded)             as units_demanded,
+               sum(units_sold)                 as units_sold,
+               count(*)                        as sku_locations,
+               sum(iff(is_out_of_stock, 1, 0)) as sku_locations_oos
+        from {MARTS}.FCT_INVENTORY_DAILY {where}
+        group by 1 order by 1
         """,
-        ttl=TTL_OPERATIONAL,
+        params=params, ttl=TTL_OPERATIONAL,
     )
-    df["snapshot_date"] = pd.to_datetime(df["snapshot_date"])
+    return _dates(df, "snapshot_date")
+
+
+def inventory_breakdown(f: GlobalFilters, dims: tuple[str, ...] = ("category",)) -> pd.DataFrame:
+    """Window KPIs grouped by category and/or warehouse_code."""
+    allowed = {"category", "warehouse_code"}
+    if not set(dims) <= allowed:
+        raise ValueError(f"dims must be within {allowed}")
+    where, params = build_where(f, INVENTORY_COLS, _scope(f))
+    group = ", ".join(dims)
+    df = run_query(
+        f"""
+        select {group},
+               count(distinct snapshot_date)                      as days,
+               sum(stock_value_gbp) / count(distinct snapshot_date) as avg_stock_value_gbp,
+               sum(net_sales_gbp)                                 as net_sales_gbp,
+               sum(cogs_gbp)                                      as cogs_gbp,
+               sum(lost_sales_gbp)                                as lost_sales_gbp,
+               sum(units_demanded)                                as units_demanded,
+               sum(units_sold)                                    as units_sold,
+               count(*)                                           as sku_locations,
+               sum(iff(is_out_of_stock, 1, 0))                    as sku_locations_oos
+        from {MARTS}.FCT_INVENTORY_DAILY {where}
+        group by {group}
+        """,
+        params=params, ttl=TTL_OPERATIONAL,
+    )
+    df["availability"] = 1 - df["sku_locations_oos"] / df["sku_locations"]
+    df["fill_rate"] = df["units_sold"] / df["units_demanded"].where(df["units_demanded"] > 0)
+    df["gross_margin"] = (df["net_sales_gbp"] - df["cogs_gbp"]) / df["net_sales_gbp"].where(df["net_sales_gbp"] > 0)
+    df["stock_turns"] = (df["cogs_gbp"] / df["days"] * 365) / df["avg_stock_value_gbp"].where(df["avg_stock_value_gbp"] > 0)
     return df
 
 
-def load_sku_daily_history(sku: str, warehouse_code: str | None = None) -> pd.DataFrame:
+def sku_history(f: GlobalFilters, sku: str, warehouse_code: str | None = None) -> pd.DataFrame:
     sql = f"""
         select snapshot_date,
+               sum(qty_on_hand)     as qty_on_hand,
                sum(units_demanded)  as units_demanded,
                sum(units_sold)      as units_sold,
-               sum(qty_on_hand)     as qty_on_hand
+               sum(stock_value_gbp) as stock_value_gbp
         from {MARTS}.FCT_INVENTORY_DAILY
-        where sku = ?
+        where sku = ? and snapshot_date between ? and ?
     """
-    params: list = [sku]
+    params: list = [sku, f.start.isoformat(), f.end.isoformat()]
     if warehouse_code:
         sql += " and warehouse_code = ?"
         params.append(warehouse_code)
-    sql += " group by 1 order by 1"
-    df = run_query(sql, params=params, ttl=TTL_OPERATIONAL)
-    df["snapshot_date"] = pd.to_datetime(df["snapshot_date"])
-    return df
+    return _dates(run_query(sql + " group by 1 order by 1", params=params, ttl=TTL_OPERATIONAL), "snapshot_date")
+
+
+def inventory_position(f: GlobalFilters) -> pd.DataFrame:
+    """Latest snapshot by site x SKU (date range does not apply)."""
+    where, params = build_where(f, POSITION_COLS, _scope(f), use_date=False)
+    return _dates(run_query(f"select * from {MARTS}.RPT_INVENTORY_POSITION {where}", params=params, ttl=TTL_OPERATIONAL),
+                  "as_of_date", "next_delivery_date", "earliest_arrival_if_ordered")
+
+
+def demand_daily(f: GlobalFilters, *, by_category: bool = False) -> pd.DataFrame:
+    """Full demand history up to the end date (forecasting needs history beyond the window)."""
+    where, params = build_where(f, INVENTORY_COLS, _scope(f), use_date=False)
+    where = f"{where} and snapshot_date <= ?" if where else "where snapshot_date <= ?"
+    params = [*params, f.end.isoformat()]
+    group = "snapshot_date, category" if by_category else "snapshot_date"
+    df = run_query(
+        f"select {group}, sum(units_demanded) as units_demanded, sum(units_sold) as units_sold "
+        f"from {MARTS}.FCT_INVENTORY_DAILY {where} group by {group} order by 1",
+        params=params, ttl=TTL_OPERATIONAL,
+    )
+    return _dates(df, "snapshot_date")
 
 
 # --------------------------------------------------------------------------- #
 # Suppliers and purchasing
 # --------------------------------------------------------------------------- #
 def load_supplier_scorecard() -> pd.DataFrame:
+    """Rolling 12-month scorecard with composite score and risk rating (not date-filtered)."""
     return run_query(f"select * from {MARTS}.RPT_SUPPLIER_SCORECARD order by spend_gbp desc", ttl=TTL_OPERATIONAL)
 
 
-def load_supplier_monthly_performance() -> pd.DataFrame:
-    df = run_query(
+def supplier_performance(f: GlobalFilters) -> pd.DataFrame:
+    """Per-supplier purchasing KPIs for PO lines ordered in the window."""
+    where, params = build_where(f, PO_COLS, _scope(f))
+    return run_query(
         f"""
-        select date_trunc('month', expected_date)                 as period_month,
-               supplier_id,
-               supplier_name,
-               sourcing_region,
-               sum(order_value_gbp)                               as spend_gbp,
-               avg(iff(is_otif, 1, 0))                            as otif_rate,
-               avg(iff(po_status = 'RECEIVED', greatest(days_late, 0), null)) as avg_days_late,
-               count(*)                                           as po_lines
-        from {MARTS}.FCT_PURCHASE_ORDERS
-        where po_status = 'RECEIVED'
-        group by 1, 2, 3, 4
+        select supplier_id,
+               any_value(supplier_name)                                        as supplier_name,
+               any_value(sourcing_region)                                      as sourcing_region,
+               count(distinct po_number)                                       as po_count,
+               count(*)                                                        as po_lines,
+               sum(order_value_gbp)                                            as spend_gbp,
+               sum(iff(po_status in ('OPEN', 'IN_TRANSIT'), order_value_gbp, 0)) as open_value_gbp,
+               sum(iff(po_status = 'RECEIVED', 1, 0))                          as lines_received,
+               avg(iff(po_status = 'RECEIVED', iff(is_otif, 1, 0), null))      as otif_rate,
+               avg(iff(po_status = 'RECEIVED', iff(is_on_time, 1, 0), null))   as on_time_rate,
+               avg(iff(po_status = 'RECEIVED', iff(is_in_full, 1, 0), null))   as in_full_rate,
+               avg(iff(po_status = 'RECEIVED', greatest(days_late, 0), null))  as avg_days_late,
+               avg(actual_lead_time_days)                                      as avg_lead_time_days,
+               stddev_samp(actual_lead_time_days)                              as lead_time_std_days,
+               avg(contract_lead_time_days)                                    as contract_lead_time_days
+        from {MARTS}.FCT_PURCHASE_ORDERS {where}
+        group by supplier_id
         """,
-        ttl=TTL_OPERATIONAL,
+        params=params, ttl=TTL_OPERATIONAL,
     )
-    df["period_month"] = pd.to_datetime(df["period_month"])
-    return df
 
 
-def load_open_purchase_orders() -> pd.DataFrame:
+def supplier_monthly(f: GlobalFilters) -> pd.DataFrame:
+    where, params = build_where(f, PO_COLS, _scope(f))
     df = run_query(
         f"""
-        select po_number,
+        select date_trunc('month', order_date)                                 as period_month,
                supplier_id,
-               supplier_name,
-               warehouse_code,
-               min(order_date)          as order_date,
-               min(expected_date)       as expected_date,
-               max(po_status)           as po_status,
-               count(*)                 as lines,
-               sum(qty_ordered)         as units,
-               sum(order_value_gbp)     as order_value_gbp
-        from {MARTS}.FCT_PURCHASE_ORDERS
-        where po_status in ('OPEN', 'IN_TRANSIT')
-        group by 1, 2, 3, 4
+               any_value(supplier_name)                                        as supplier_name,
+               any_value(sourcing_region)                                      as sourcing_region,
+               sum(order_value_gbp)                                            as spend_gbp,
+               sum(iff(po_status = 'RECEIVED', 1, 0))                          as lines_received,
+               sum(iff(po_status = 'RECEIVED' and is_otif, 1, 0))              as lines_otif,
+               avg(iff(po_status = 'RECEIVED', greatest(days_late, 0), null))  as avg_days_late
+        from {MARTS}.FCT_PURCHASE_ORDERS {where}
+        group by 1, 2 order by 1
+        """,
+        params=params, ttl=TTL_OPERATIONAL,
+    )
+    df["otif_rate"] = df["lines_otif"] / df["lines_received"].where(df["lines_received"] > 0)
+    return _dates(df, "period_month")
+
+
+def open_purchase_orders(f: GlobalFilters) -> pd.DataFrame:
+    """Open / in-transit PO lines (date range does not apply: the order book is current)."""
+    where, params = build_where(f, PO_COLS, _scope(f), use_date=False)
+    status = "po_status in ('OPEN', 'IN_TRANSIT')"
+    where = f"{where} and {status}" if where else f"where {status}"
+    df = run_query(
+        f"""
+        select po_number, supplier_id, supplier_name, warehouse_code, sku, product_name, category,
+               order_date, expected_date, po_status, qty_ordered, order_value_gbp
+        from {MARTS}.FCT_PURCHASE_ORDERS {where}
         order by expected_date
         """,
-        ttl=TTL_OPERATIONAL,
+        params=params, ttl=TTL_OPERATIONAL,
     )
-    for col in ("order_date", "expected_date"):
-        df[col] = pd.to_datetime(df[col])
-    return df
+    return _dates(df, "order_date", "expected_date")
 
 
 # --------------------------------------------------------------------------- #
 # Logistics
 # --------------------------------------------------------------------------- #
-def load_logistics_monthly() -> pd.DataFrame:
-    df = run_query(f"select * from {MARTS}.RPT_LOGISTICS_MONTHLY", ttl=TTL_OPERATIONAL)
-    df["period_month"] = pd.to_datetime(df["period_month"])
-    return df
-
-
-def load_shipments_in_flight() -> pd.DataFrame:
+def shipments_monthly(f: GlobalFilters) -> pd.DataFrame:
+    where, params = build_where(f, SHIPMENT_COLS)
     df = run_query(
         f"""
-        select shipment_id, po_number, supplier_name, carrier, transport_mode, origin_country,
-               warehouse_code, dispatch_date, planned_arrival, pallets, freight_cost_gbp,
-               duty_cost_gbp, co2_kg, shipment_status
-        from {MARTS}.FCT_SHIPMENTS
-        where shipment_status in ('IN_TRANSIT', 'BOOKED')
+        select date_trunc('month', dispatch_date)                         as period_month,
+               transport_mode, carrier, warehouse_code, sourcing_region,
+               count(*)                                                   as shipments,
+               sum(iff(shipment_status = 'DELIVERED', 1, 0))              as delivered,
+               sum(iff(shipment_status = 'DELIVERED' and is_on_time_arrival, 1, 0)) as on_time,
+               sum(pallets)                                               as pallets,
+               sum(freight_cost_gbp)                                      as freight_cost_gbp,
+               sum(duty_cost_gbp)                                         as duty_cost_gbp,
+               sum(landed_cost_gbp)                                       as landed_cost_gbp,
+               sum(co2_kg) / 1000                                         as co2_tonnes,
+               sum(iff(shipment_status = 'DELIVERED', transit_days, 0))   as transit_days_sum,
+               sum(iff(shipment_status = 'DELIVERED', greatest(arrival_delay_days, 0), 0)) as delay_days_sum
+        from {MARTS}.FCT_SHIPMENTS {where}
+        group by 1, 2, 3, 4, 5 order by 1
+        """,
+        params=params, ttl=TTL_OPERATIONAL,
+    )
+    return _dates(df, "period_month")
+
+
+def shipments_open(f: GlobalFilters) -> pd.DataFrame:
+    """Booked / in-transit shipments (date range does not apply)."""
+    where, params = build_where(f, SHIPMENT_COLS, use_date=False)
+    status = "shipment_status in ('IN_TRANSIT', 'BOOKED')"
+    where = f"{where} and {status}" if where else f"where {status}"
+    df = run_query(
+        f"""
+        select shipment_id, po_number, supplier_name, carrier, transport_mode, origin_country, warehouse_code,
+               dispatch_date, planned_arrival, pallets, freight_cost_gbp, duty_cost_gbp, co2_kg, shipment_status
+        from {MARTS}.FCT_SHIPMENTS {where}
         order by planned_arrival
         """,
-        ttl=TTL_OPERATIONAL,
+        params=params, ttl=TTL_OPERATIONAL,
     )
-    for col in ("dispatch_date", "planned_arrival"):
-        df[col] = pd.to_datetime(df[col])
-    return df
+    return _dates(df, "dispatch_date", "planned_arrival")
 
 
 # --------------------------------------------------------------------------- #
 # Warehouses, costs and budgets
 # --------------------------------------------------------------------------- #
-def load_warehouse_utilisation() -> pd.DataFrame:
-    df = run_query(f"select * from {MARTS}.RPT_WAREHOUSE_UTILISATION", ttl=TTL_OPERATIONAL)
-    df["period_month"] = pd.to_datetime(df["period_month"])
-    return df
+def warehouse_utilisation(f: GlobalFilters) -> pd.DataFrame:
+    where, params = build_where(_month_window(f), UTILISATION_COLS)
+    return _dates(run_query(f"select * from {MARTS}.RPT_WAREHOUSE_UTILISATION {where} order by period_month",
+                            params=params, ttl=TTL_OPERATIONAL), "period_month")
 
 
-def load_warehouse_costs() -> pd.DataFrame:
-    df = run_query(f"select * from {STAGING}.STG_WAREHOUSE_COSTS", ttl=TTL_OPERATIONAL)
-    df["period_month"] = pd.to_datetime(df["period_month"])
-    return df
+def warehouse_costs(f: GlobalFilters) -> pd.DataFrame:
+    where, params = build_where(_month_window(f), UTILISATION_COLS)
+    return _dates(run_query(f"select * from {STAGING}.STG_WAREHOUSE_COSTS {where}", params=params, ttl=TTL_OPERATIONAL),
+                  "period_month")
 
 
 def load_budget_vs_actual() -> pd.DataFrame:
-    df = run_query(f"select * from {MARTS}.RPT_BUDGET_VS_ACTUAL", ttl=TTL_OPERATIONAL)
-    df["period_month"] = pd.to_datetime(df["period_month"])
+    """All budget lines; pages filter by fiscal year / dimension in memory (small table)."""
+    return _dates(run_query(f"select * from {MARTS}.RPT_BUDGET_VS_ACTUAL", ttl=TTL_OPERATIONAL), "period_month")
+
+
+# --------------------------------------------------------------------------- #
+# Customers and sales
+# --------------------------------------------------------------------------- #
+def customer_sales_daily(f: GlobalFilters, *, with_prior: bool = True) -> pd.DataFrame:
+    window = replace(f, start=f.prior().start) if with_prior else f
+    where, params = build_where(window, CUSTOMER_COLS, _scope(f))
+    df = run_query(
+        f"""
+        select f.sales_date, c.channel,
+               sum(f.net_sales_gbp)    as net_sales_gbp,
+               sum(f.gross_profit_gbp) as gross_profit_gbp,
+               sum(f.lost_sales_gbp)   as lost_sales_gbp,
+               sum(f.units_demanded)   as units_demanded,
+               sum(f.units_sold)       as units_sold
+        from {MARTS}.FCT_CUSTOMER_SALES_DAILY f
+        join {MARTS}.DIM_CUSTOMER c on c.customer_id = f.customer_id
+        {where}
+        group by 1, 2 order by 1
+        """,
+        params=params, ttl=TTL_OPERATIONAL,
+    )
+    return _dates(df, "sales_date")
+
+
+def customer_summary(f: GlobalFilters) -> pd.DataFrame:
+    where, params = build_where(f, CUSTOMER_COLS, _scope(f))
+    df = run_query(
+        f"""
+        select c.customer_id, c.customer_name, c.channel, c.customer_segment, c.warehouse_code, c.warehouse_name,
+               c.uk_region, c.account_manager, c.credit_terms_days, c.credit_limit_gbp,
+               sum(f.net_sales_gbp)    as net_sales_gbp,
+               sum(f.gross_profit_gbp) as gross_profit_gbp,
+               sum(f.lost_sales_gbp)   as lost_sales_gbp,
+               sum(f.units_demanded)   as units_demanded,
+               sum(f.units_sold)       as units_sold,
+               count(distinct f.sku)   as skus_bought
+        from {MARTS}.FCT_CUSTOMER_SALES_DAILY f
+        join {MARTS}.DIM_CUSTOMER c on c.customer_id = f.customer_id
+        {where}
+        group by 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+        """,
+        params=params, ttl=TTL_OPERATIONAL,
+    )
+    df["gross_margin"] = df["gross_profit_gbp"] / df["net_sales_gbp"].where(df["net_sales_gbp"] > 0)
+    df["fill_rate"] = df["units_sold"] / df["units_demanded"].where(df["units_demanded"] > 0)
     return df
+
+
+def customer_category_mix(f: GlobalFilters) -> pd.DataFrame:
+    where, params = build_where(f, CUSTOMER_COLS, _scope(f))
+    return run_query(
+        f"""
+        select c.channel, f.category, f.customer_id,
+               sum(f.net_sales_gbp) as net_sales_gbp, sum(f.gross_profit_gbp) as gross_profit_gbp
+        from {MARTS}.FCT_CUSTOMER_SALES_DAILY f
+        join {MARTS}.DIM_CUSTOMER c on c.customer_id = f.customer_id
+        {where}
+        group by 1, 2, 3
+        """,
+        params=params, ttl=TTL_OPERATIONAL,
+    )
+
+
+def customer_weekly(f: GlobalFilters, customer_id: str) -> pd.DataFrame:
+    where, params = build_where(f, CUSTOMER_COLS, _scope(f))
+    where = f"{where} and f.customer_id = ?" if where else "where f.customer_id = ?"
+    df = run_query(
+        f"""
+        select date_trunc('week', f.sales_date) as week, f.category,
+               sum(f.net_sales_gbp) as net_sales_gbp, sum(f.lost_sales_gbp) as lost_sales_gbp
+        from {MARTS}.FCT_CUSTOMER_SALES_DAILY f {where}
+        group by 1, 2 order by 1
+        """,
+        params=[*params, customer_id], ttl=TTL_OPERATIONAL,
+    )
+    return _dates(df, "week")
+
+
+# --------------------------------------------------------------------------- #
+# Governance
+# --------------------------------------------------------------------------- #
+def load_catalogue() -> pd.DataFrame:
+    df = run_query(
+        f"""
+        select table_schema, table_name, table_type, row_count, bytes, last_altered, comment
+        from {DATABASE}.information_schema.tables
+        where table_schema in ('RAW', 'STAGING', 'MARTS', 'APP')
+        order by decode(table_schema, 'RAW', 1, 'STAGING', 2, 'MARTS', 3, 4), table_name
+        """,
+        ttl=TTL_OPERATIONAL,
+    )
+    return _dates(df, "last_altered")
+
+
+def load_columns(schema: str, table: str) -> pd.DataFrame:
+    return run_query(
+        f"""
+        select column_name, data_type, is_nullable, comment
+        from {DATABASE}.information_schema.columns
+        where table_schema = ? and table_name = ?
+        order by ordinal_position
+        """,
+        params=[schema, table], ttl=TTL_REFERENCE,
+    )
+
+
+def load_audit_log(limit: int = 500) -> pd.DataFrame:
+    return _dates(run_query(
+        f"select event_ts, user_name, event_type, event_detail from {APP_SCHEMA}.APP_AUDIT_LOG "
+        f"order by event_ts desc limit {int(limit)}",
+        ttl=0,
+    ), "event_ts")
 
 
 # --------------------------------------------------------------------------- #
@@ -214,7 +432,7 @@ def submit_replenishment_requests(lines: pd.DataFrame, note: str) -> int:
     params: list = []
     for row in lines.itertuples(index=False):
         params += [
-            str(row.as_of_date),
+            str(pd.Timestamp(row.as_of_date).date()),
             row.warehouse_code,
             row.sku,
             row.supplier_id,

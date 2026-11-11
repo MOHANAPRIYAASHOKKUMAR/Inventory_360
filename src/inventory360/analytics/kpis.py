@@ -97,3 +97,33 @@ def weekly_trend(daily: pd.DataFrame) -> pd.DataFrame:
     wk["days_cover"] = wk["stock_value_gbp"] / (wk["cogs_gbp"] / wk["days"])
     # Partial weeks (start of history / current week) distort weekly sums
     return wk[wk["days"] == 7].reset_index(drop=True)
+
+
+GRAINS = {"Daily": "D", "Weekly": "W-SUN", "Monthly": "MS"}
+
+
+def bucket(df: pd.DataFrame, date_col: str, grain: str, sums: list[str], by: list[str] | None = None,
+           means: list[str] | None = None) -> pd.DataFrame:
+    """Aggregate a daily frame to Daily / Weekly (week starting Monday) / Monthly periods.
+
+    ``sums`` are flow measures added up across days; ``means`` are stock measures
+    averaged across the days in the period (e.g. stock value).
+    """
+    d = df.copy()
+    ts = pd.to_datetime(d[date_col])
+    if grain == "Weekly":
+        d["period"] = (ts - pd.to_timedelta(ts.dt.dayofweek, unit="D")).dt.normalize()
+    elif grain == "Monthly":
+        d["period"] = ts.dt.to_period("M").dt.start_time
+    else:
+        d["period"] = ts.dt.normalize()
+    keys = ["period", *(by or [])]
+    means = means or []
+    # Stock measures: sum across groups per day first, then average days within the period
+    if means:
+        per_day = d.groupby([*keys, date_col], as_index=False)[means].sum()
+        avg = per_day.groupby(keys, as_index=False)[means].mean()
+    out = d.groupby(keys, as_index=False)[sums].sum() if sums else d[keys].drop_duplicates()
+    if means:
+        out = out.merge(avg, on=keys, how="left")
+    return out.sort_values(keys).reset_index(drop=True)

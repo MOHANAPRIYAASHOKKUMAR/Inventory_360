@@ -1,189 +1,214 @@
-"""Altair chart builders with consistent enterprise styling."""
+"""Plotly chart builders with the Inventory 360 house style.
+
+All charts share one look: white plot panels on the grey app canvas, navy text,
+teal accent, fixed RAG colours, and consistent GBP / percentage axis formats.
+Rendered with ``theme=None`` so the house style is not overridden.
+"""
 from __future__ import annotations
 
-import altair as alt
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
 
-from inventory360.utils.config import RISK_COLOURS, STOCK_STATUS_COLOURS, STOCK_STATUS_ORDER
+NAVY = "#0B2545"
+NAVY_2 = "#1E3A5F"
+TEAL = "#0F766E"
+TEAL_LIGHT = "#14B8A6"
+SLATE = "#94A3B8"
+GRID = "#E6EBF1"
+RED, AMBER, GREEN = "#C0392B", "#D97706", "#15803D"
+RAG_COLOURS = {"Red": RED, "Amber": AMBER, "Green": GREEN, "n/a": SLATE}
+PALETTE = ["#0B2545", "#0F766E", "#5B8DB8", "#14B8A6", "#94A3B8", "#1E3A5F", "#7FB7B0", "#C49A3A", "#8C6B9E", "#3F6E8C"]
+STATUS_COLOURS = {
+    "Out of stock": "#991B1B", "Critical": RED, "Low": AMBER,
+    "Healthy": GREEN, "Overstock": "#5B8DB8", "Excess": NAVY_2,
+}
+FONT = '"Source Sans Pro", "Segoe UI", "Helvetica Neue", Arial, sans-serif'
 
-GBP_AXIS = alt.Axis(format="~s", labelExpr="'£' + datum.label")
-PCT_AXIS = alt.Axis(format=".0%")
+CONFIG = {
+    "displaylogo": False,
+    "modeBarButtonsToRemove": ["lasso2d", "select2d", "autoScale2d", "toggleSpikelines"],
+    "toImageButtonOptions": {"format": "png", "scale": 2},
+}
+
+# Axis formats: tick label / hover label
+FORMATS = {
+    "gbp": {"tickprefix": "£", "tickformat": "~s", "hoverformat": ",.0f"},
+    "gbp2": {"tickprefix": "£", "tickformat": ",.2f", "hoverformat": ",.2f"},
+    "pct": {"tickformat": ".0%", "hoverformat": ".1%"},
+    "num": {"tickformat": "~s", "hoverformat": ",.0f"},
+    "dec": {"tickformat": ",.1f", "hoverformat": ",.1f"},
+    "days": {"ticksuffix": " d", "tickformat": ",.0f", "hoverformat": ",.1f"},
+}
 
 
-def _base(chart: alt.Chart, height: int) -> alt.Chart:
-    return chart.properties(height=height).configure_view(strokeWidth=0)
+def _axis(kind: str | None, title: str | None = None) -> dict:
+    out = {"title": {"text": title, "font": {"size": 12}} if title else None,
+           "gridcolor": GRID, "zeroline": False, "linecolor": GRID}
+    if kind:
+        out.update(FORMATS[kind])
+    return out
 
 
-def line(df: pd.DataFrame, x: str, y: str, color: str | None = None, y_title: str = "",
-         gbp: bool = False, pct: bool = False, height: int = 280) -> alt.Chart:
-    axis = GBP_AXIS if gbp else PCT_AXIS if pct else alt.Axis(format="~s")
-    enc = {
-        "x": alt.X(f"{x}:T", title=None),
-        "y": alt.Y(f"{y}:Q", title=y_title, axis=axis),
-        "tooltip": [alt.Tooltip(f"{x}:T", title="Period"),
-                    alt.Tooltip(f"{y}:Q", title=y_title or y, format=",.2%" if pct else ",.0f")],
-    }
-    if color:
-        enc["color"] = alt.Color(f"{color}:N", title=None, legend=alt.Legend(orient="bottom"))
-        enc["tooltip"].insert(0, alt.Tooltip(f"{color}:N"))
-    return _base(alt.Chart(df).mark_line(point=False, strokeWidth=2.2).encode(**enc), height)
-
-
-def area_with_line(df: pd.DataFrame, x: str, area_y: str, line_y: str, area_title: str,
-                   line_title: str, height: int = 300) -> alt.LayerChart:
-    """Dual-axis: bars/areas for value (left, GBP) and a line for a ratio (right)."""
-    base = alt.Chart(df).encode(x=alt.X(f"{x}:T", title=None))
-    area = base.mark_area(opacity=0.35, line=True).encode(
-        y=alt.Y(f"{area_y}:Q", title=area_title, axis=GBP_AXIS),
-        tooltip=[alt.Tooltip(f"{x}:T", title="Week"), alt.Tooltip(f"{area_y}:Q", title=area_title, format=",.0f")],
+def style(fig: go.Figure, *, height: int = 320, y: str | None = None, x: str | None = None,
+          y_title: str | None = None, x_title: str | None = None, legend: bool = True,
+          hovermode: str | None = "x unified") -> go.Figure:
+    fig.update_layout(
+        height=height,
+        margin={"l": 8, "r": 8, "t": 36 if legend else 12, "b": 8},
+        font={"family": FONT, "size": 12, "color": NAVY},
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
+        colorway=PALETTE,
+        hovermode=hovermode,
+        hoverlabel={"bgcolor": "#FFFFFF", "bordercolor": GRID, "font": {"family": FONT, "color": NAVY}},
+        showlegend=legend,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.0, "x": 0, "title": None, "font": {"size": 11}},
+        xaxis=_axis(x, x_title),
+        yaxis=_axis(y, y_title),
+        bargap=0.25,
     )
-    ln = base.mark_line(color="#E04F16", strokeWidth=2).encode(
-        y=alt.Y(f"{line_y}:Q", title=line_title, axis=PCT_AXIS, scale=alt.Scale(zero=False)),
-        tooltip=[alt.Tooltip(f"{x}:T", title="Week"), alt.Tooltip(f"{line_y}:Q", title=line_title, format=".2%")],
-    )
-    return alt.layer(area, ln).resolve_scale(y="independent").properties(height=height).configure_view(strokeWidth=0)
+    return fig
 
 
-def bar(df: pd.DataFrame, x: str, y: str, color: str | None = None, horizontal: bool = False,
-        gbp: bool = False, pct: bool = False, sort: str | None = "-x", height: int = 280,
-        title_x: str = "", title_y: str = "", stack: bool = True) -> alt.Chart:
-    axis = GBP_AXIS if gbp else PCT_AXIS if pct else alt.Axis(format="~s")
-    fmt = ",.1%" if pct else ",.0f"
+def show(fig: go.Figure, alt: str, *, key: str | None = None, select: bool = False):
+    """Render a figure; with ``select=True`` returns the click / selection state."""
+    if select:
+        return st.plotly_chart(fig, theme=None, config=CONFIG, alt=alt, key=key,
+                               on_select="rerun", selection_mode="points")
+    st.plotly_chart(fig, theme=None, config=CONFIG, alt=alt, key=key)
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Builders
+# --------------------------------------------------------------------------- #
+def line(df: pd.DataFrame, x: str, y: str, color: str | None = None, *, kind: str = "gbp",
+         height: int = 320, y_title: str | None = None, target: float | None = None,
+         target_label: str = "Target", colors: dict | None = None, markers: bool = False) -> go.Figure:
+    fig = px.line(df, x=x, y=y, color=color, color_discrete_map=colors, markers=markers,
+                  color_discrete_sequence=PALETTE)
+    fig.update_traces(line={"width": 2.2})
+    if target is not None:
+        fig.add_hline(y=target, line_dash="dot", line_color=AMBER, line_width=1.5,
+                      annotation_text=target_label, annotation_position="top left",
+                      annotation_font={"color": AMBER, "size": 11})
+    return style(fig, height=height, y=kind, y_title=y_title, legend=color is not None)
+
+
+def bar(df: pd.DataFrame, x: str, y: str, color: str | None = None, *, kind: str = "gbp",
+        horizontal: bool = False, stacked: bool = True, height: int = 320, value_title: str | None = None,
+        colors: dict | None = None, single_colour: str = TEAL, order: list | None = None,
+        text: bool = False) -> go.Figure:
+    kwargs = {"x": y, "y": x, "orientation": "h"} if horizontal else {"x": x, "y": y}
+    fig = px.bar(df, color=color, color_discrete_map=colors, barmode="stack" if stacked else "group",
+                 color_discrete_sequence=PALETTE if color else [single_colour],
+                 category_orders={x: order} if order else None, **kwargs)
+    fig.update_traces(marker_line_width=0)
+    if text:
+        fmt = FORMATS[kind]
+        fig.update_traces(texttemplate=f"{fmt.get('tickprefix', '')}%{{{'x' if horizontal else 'y'}:{fmt['tickformat']}}}"
+                          f"{fmt.get('ticksuffix', '')}", textposition="outside", cliponaxis=False)
     if horizontal:
-        enc = {
-            "y": alt.Y(f"{x}:N", title=title_x or None, sort=sort),
-            "x": alt.X(f"{y}:Q", title=title_y, axis=axis, stack=stack or None),
-        }
+        fig = style(fig, height=height, x=kind, x_title=value_title, legend=color is not None, hovermode="y unified")
+        fig.update_yaxes(title=None, autorange="reversed" if not order else None, gridcolor="rgba(0,0,0,0)")
     else:
-        enc = {
-            "x": alt.X(f"{x}:N", title=title_x or None, sort=sort),
-            "y": alt.Y(f"{y}:Q", title=title_y, axis=axis, stack=stack or None),
-        }
-    enc["tooltip"] = [alt.Tooltip(f"{x}:N"), alt.Tooltip(f"{y}:Q", format=fmt, title=title_y or y)]
-    if color:
-        enc["color"] = alt.Color(f"{color}:N", title=None, legend=alt.Legend(orient="bottom"))
-        enc["tooltip"].insert(1, alt.Tooltip(f"{color}:N"))
-        if not stack:
-            enc["xOffset" if not horizontal else "yOffset"] = alt.XOffset(f"{color}:N") if not horizontal else alt.YOffset(f"{color}:N")
-    return _base(alt.Chart(df).mark_bar(cornerRadiusEnd=3).encode(**enc), height)
+        fig = style(fig, height=height, y=kind, y_title=value_title, legend=color is not None)
+        fig.update_xaxes(title=None)
+    return fig
 
 
-def monthly_bar(df: pd.DataFrame, x: str, y: str, color: str | None = None, gbp: bool = True,
-                height: int = 280, y_title: str = "") -> alt.Chart:
-    enc = {
-        "x": alt.X(f"yearmonth({x}):T", title=None, axis=alt.Axis(format="%b %y")),
-        "y": alt.Y(f"sum({y}):Q", title=y_title, axis=GBP_AXIS if gbp else alt.Axis(format="~s")),
-        "tooltip": [alt.Tooltip(f"yearmonth({x}):T", title="Month"),
-                    alt.Tooltip(f"sum({y}):Q", title=y_title or y, format=",.0f")],
-    }
-    if color:
-        enc["color"] = alt.Color(f"{color}:N", title=None, legend=alt.Legend(orient="bottom"))
-        enc["tooltip"].insert(1, alt.Tooltip(f"{color}:N"))
-    return _base(alt.Chart(df).mark_bar().encode(**enc), height)
+def combo(df: pd.DataFrame, x: str, bar_y: str, line_y: str, bar_name: str, line_name: str, *,
+          bar_kind: str = "gbp", line_kind: str = "pct", height: int = 320,
+          line_target: float | None = None) -> go.Figure:
+    """Bars on the left axis with a line on a secondary right axis."""
+    fig = go.Figure()
+    fig.add_bar(x=df[x], y=df[bar_y], name=bar_name, marker_color="#B8C7D9", marker_line_width=0)
+    fig.add_scatter(x=df[x], y=df[line_y], name=line_name, mode="lines+markers", yaxis="y2",
+                    line={"color": TEAL, "width": 2.4}, marker={"size": 5})
+    style(fig, height=height, y=bar_kind)
+    fig.update_layout(yaxis2={**_axis(line_kind), "overlaying": "y", "side": "right", "showgrid": False})
+    if line_target is not None:
+        fig.add_hline(y=line_target, yref="y2", line_dash="dot", line_color=AMBER, line_width=1.5,
+                      annotation_text="Target", annotation_position="top left",
+                      annotation_font={"color": AMBER, "size": 11})
+    return fig
 
 
-def status_donut(df: pd.DataFrame, value: str, height: int = 260) -> alt.Chart:
-    present = [s for s in STOCK_STATUS_ORDER if s in set(df["stock_status"])]
-    return _base(
-        alt.Chart(df).mark_arc(innerRadius=62, cornerRadius=3).encode(
-            theta=alt.Theta(f"{value}:Q", stack=True),
-            color=alt.Color(
-                "stock_status:N",
-                title=None,
-                scale=alt.Scale(domain=present, range=[STOCK_STATUS_COLOURS[s] for s in present]),
-                sort=present,
-                legend=alt.Legend(orient="right"),
-            ),
-            order=alt.Order("order:Q"),
-            tooltip=[alt.Tooltip("stock_status:N", title="Status"), alt.Tooltip(f"{value}:Q", format=",.0f")],
-        ).transform_calculate(order=f"indexof({present}, datum.stock_status)"),
-        height,
-    )
+def donut(df: pd.DataFrame, names: str, values: str, *, colors: dict | None = None, kind: str = "num",
+          height: int = 300, order: list | None = None) -> go.Figure:
+    if order:
+        df = df.set_index(names).reindex([o for o in order if o in set(df[names])]).reset_index()
+    marker = {"colors": [colors.get(n, SLATE) for n in df[names]]} if colors else {"colors": PALETTE}
+    fmt = FORMATS[kind]
+    fig = go.Figure(go.Pie(
+        labels=df[names], values=df[values], hole=0.62, sort=False, direction="clockwise", marker=marker,
+        textinfo="percent", textfont={"size": 11, "color": "#FFFFFF"},
+        hovertemplate=f"%{{label}}<br>{fmt.get('tickprefix', '')}%{{value:{fmt['hoverformat']}}} · %{{percent}}<extra></extra>",
+    ))
+    style(fig, height=height, hovermode="closest")
+    fig.update_layout(legend={"orientation": "v", "y": 0.5, "yanchor": "middle", "x": 1.02})
+    return fig
 
 
-def status_stacked_bar(df: pd.DataFrame, category: str, value: str, height: int = 320) -> alt.Chart:
-    present = [s for s in STOCK_STATUS_ORDER if s in set(df["stock_status"])]
-    return _base(
-        alt.Chart(df).mark_bar().encode(
-            y=alt.Y(f"{category}:N", title=None, sort="-x"),
-            x=alt.X(f"sum({value}):Q", title="Share of SKU-locations", stack="normalize", axis=PCT_AXIS),
-            color=alt.Color(
-                "stock_status:N", title=None,
-                scale=alt.Scale(domain=present, range=[STOCK_STATUS_COLOURS[s] for s in present]),
-                sort=present, legend=alt.Legend(orient="bottom"),
-            ),
-            order=alt.Order("order:Q"),
-            tooltip=[alt.Tooltip(f"{category}:N"), alt.Tooltip("stock_status:N"),
-                     alt.Tooltip(f"sum({value}):Q", title="SKU-locations")],
-        ).transform_calculate(order=f"indexof({present}, datum.stock_status)"),
-        height,
-    )
+def scatter(df: pd.DataFrame, x: str, y: str, *, color: str | None = None, size: str | None = None,
+            hover: str | None = None, x_kind: str = "gbp", y_kind: str = "pct", height: int = 360,
+            colors: dict | None = None, x_title: str | None = None, y_title: str | None = None,
+            y_ref: float | None = None, x_log: bool = False, custom: list[str] | None = None,
+            size_max: int = 34) -> go.Figure:
+    fig = px.scatter(df, x=x, y=y, color=color, size=size, hover_name=hover, color_discrete_map=colors,
+                     color_discrete_sequence=PALETTE, size_max=size_max, log_x=x_log, custom_data=custom)
+    fig.update_traces(marker={"line": {"width": 1, "color": "#FFFFFF"}, "opacity": 0.88})
+    if y_ref is not None:
+        fig.add_hline(y=y_ref, line_dash="dot", line_color=AMBER, line_width=1.5,
+                      annotation_text="Target", annotation_position="bottom right",
+                      annotation_font={"color": AMBER, "size": 11})
+    return style(fig, height=height, x=x_kind, y=y_kind, x_title=x_title, y_title=y_title,
+                 legend=color is not None, hovermode="closest")
 
 
-def supplier_matrix(df: pd.DataFrame, height: int = 380) -> alt.Chart:
-    """Spend vs OTIF bubble matrix coloured by risk rating."""
-    present = [r for r in ("High", "Medium", "Low") if r in set(df["risk_rating"])]
-    return _base(
-        alt.Chart(df).mark_circle(opacity=0.8, stroke="#FFFFFF", strokeWidth=1).encode(
-            x=alt.X("otif_rate:Q", title="OTIF (12 months)", axis=PCT_AXIS, scale=alt.Scale(zero=False)),
-            y=alt.Y("spend_gbp:Q", title="Spend (12 months)", axis=GBP_AXIS),
-            size=alt.Size("lead_time_variability_days:Q", title="Lead-time variability (days)",
-                          scale=alt.Scale(range=[60, 900]), legend=None),
-            color=alt.Color("risk_rating:N", title="Risk",
-                            scale=alt.Scale(domain=present, range=[RISK_COLOURS[r] for r in present]),
-                            legend=alt.Legend(orient="bottom")),
-            tooltip=[
-                alt.Tooltip("supplier_name:N", title="Supplier"),
-                alt.Tooltip("country_name:N", title="Country"),
-                alt.Tooltip("spend_gbp:Q", title="Spend £", format=",.0f"),
-                alt.Tooltip("otif_rate:Q", title="OTIF", format=".1%"),
-                alt.Tooltip("performance_score:Q", title="Score"),
-                alt.Tooltip("lead_time_variability_days:Q", title="LT variability (d)", format=".1f"),
-            ],
-        ),
-        height,
-    )
+def heatmap(pivot: pd.DataFrame, *, kind: str = "pct", height: int = 340, reverse: bool = False,
+            zmid: float | None = None) -> go.Figure:
+    """Rows x columns matrix; ``reverse`` makes low values teal (good) and high red."""
+    fmt = FORMATS[kind]
+    scale = [[0, RED], [0.5, "#F8E1D8"], [1, TEAL]] if not reverse else [[0, TEAL], [0.5, "#F8E1D8"], [1, RED]]
+    fig = go.Figure(go.Heatmap(
+        z=pivot.values, x=list(pivot.columns), y=list(pivot.index), colorscale=scale, zmid=zmid,
+        xgap=2, ygap=2, colorbar={"thickness": 10, "tickformat": fmt["tickformat"],
+                                   "tickprefix": fmt.get("tickprefix", "")},
+        hovertemplate=f"%{{y}} · %{{x}}<br>{fmt.get('tickprefix', '')}%{{z:{fmt['hoverformat']}}}<extra></extra>",
+        texttemplate=f"{fmt.get('tickprefix', '')}%{{z:{fmt['tickformat']}}}", textfont={"size": 10},
+    ))
+    style(fig, height=height, legend=False, hovermode="closest")
+    fig.update_xaxes(side="top", gridcolor="rgba(0,0,0,0)", tickangle=0)
+    fig.update_yaxes(autorange="reversed", gridcolor="rgba(0,0,0,0)")
+    return fig
 
 
-def forecast_chart(df: pd.DataFrame, height: int = 340) -> alt.LayerChart:
-    base = alt.Chart(df).encode(x=alt.X("week:T", title=None))
-    band = base.mark_area(opacity=0.18, color="#1D4ED8").encode(y="lower:Q", y2="upper:Q")
-    actual = base.mark_line(color="#0F172A", strokeWidth=1.8).encode(
-        y=alt.Y("actual:Q", title="Units per week", axis=alt.Axis(format="~s")),
-        tooltip=[alt.Tooltip("week:T"), alt.Tooltip("actual:Q", format=",.0f")],
-    )
-    fitted = base.mark_line(color="#94A3B8", strokeDash=[4, 3]).encode(y="fitted:Q")
-    fc = base.mark_line(color="#1D4ED8", strokeWidth=2.5).encode(
-        y="forecast:Q",
-        tooltip=[alt.Tooltip("week:T"), alt.Tooltip("forecast:Q", format=",.0f"),
-                 alt.Tooltip("lower:Q", format=",.0f"), alt.Tooltip("upper:Q", format=",.0f")],
-    )
-    return alt.layer(band, actual, fitted, fc).properties(height=height).configure_view(strokeWidth=0)
+def waterfall(labels: list[str], values: list[float], *, total_label: str = "Total", height: int = 340) -> go.Figure:
+    """Variance bridge: positive (overspend) red, negative (saving) green."""
+    fig = go.Figure(go.Waterfall(
+        x=[*labels, total_label], y=[*values, sum(values)], measure=["relative"] * len(values) + ["total"],
+        increasing={"marker": {"color": RED}}, decreasing={"marker": {"color": GREEN}},
+        totals={"marker": {"color": NAVY}}, connector={"line": {"color": GRID}},
+        texttemplate="£%{y:~s}", textposition="outside", cliponaxis=False,
+        hovertemplate="%{x}<br>£%{y:,.0f}<extra></extra>",
+    ))
+    style(fig, height=height, y="gbp", legend=False, hovermode="closest")
+    return fig
 
 
-def pareto(df: pd.DataFrame, height: int = 300) -> alt.LayerChart:
-    base = alt.Chart(df).encode(x=alt.X("rank_pct:Q", title="Share of SKUs", axis=PCT_AXIS))
-    curve = base.mark_area(opacity=0.25, line={"color": "#1D4ED8"}, color="#1D4ED8").encode(
-        y=alt.Y("cumulative_share:Q", title="Cumulative share of sales", axis=PCT_AXIS),
-        tooltip=[alt.Tooltip("sku:N"), alt.Tooltip("abc_class:N"),
-                 alt.Tooltip("cumulative_share:Q", format=".1%")],
-    )
-    rules = alt.Chart(pd.DataFrame({"y": [0.80, 0.95]})).mark_rule(strokeDash=[4, 4], color="#94A3B8").encode(y="y:Q")
-    return alt.layer(curve, rules).properties(height=height).configure_view(strokeWidth=0)
-
-
-def uk_site_map(df: pd.DataFrame, size_col: str, colour_col: str, height: int = 420) -> alt.Chart:
-    """Dot map of UK sites on a lat/long plane (no remote tiles, SiS-safe)."""
-    return _base(
-        alt.Chart(df).mark_circle(opacity=0.85, stroke="#0B1F3A", strokeWidth=1).encode(
-            longitude="longitude:Q",
-            latitude="latitude:Q",
-            size=alt.Size(f"{size_col}:Q", scale=alt.Scale(range=[150, 1800]), legend=None),
-            color=alt.Color(f"{colour_col}:Q", title="Utilisation", scale=alt.Scale(scheme="blues", domain=[0, 1]),
-                            legend=alt.Legend(format=".0%", orient="bottom")),
-            tooltip=[alt.Tooltip("warehouse_name:N", title="Site"), alt.Tooltip("uk_region:N", title="Region"),
-                     alt.Tooltip("capacity_pallets:Q", title="Capacity (pallets)", format=",.0f"),
-                     alt.Tooltip(f"{colour_col}:Q", title="Utilisation", format=".1%")],
-        ).project(type="mercator"),
-        height,
-    )
+def forecast(fc: pd.DataFrame, *, height: int = 380) -> go.Figure:
+    """Actuals, model fit and forecast with an 80% prediction band."""
+    fut = fc[fc["forecast"].notna()]
+    fig = go.Figure()
+    fig.add_scatter(x=pd.concat([fut["week"], fut["week"][::-1]]), y=pd.concat([fut["upper"], fut["lower"][::-1]]),
+                    fill="toself", fillcolor="rgba(15,118,110,0.14)", line={"width": 0}, hoverinfo="skip",
+                    name="80% interval")
+    fig.add_scatter(x=fc["week"], y=fc["actual"], name="Actual", mode="lines", line={"color": NAVY, "width": 2})
+    fig.add_scatter(x=fc["week"], y=fc["fitted"], name="Model fit", mode="lines",
+                    line={"color": SLATE, "width": 1.5, "dash": "dot"})
+    fig.add_scatter(x=fut["week"], y=fut["forecast"], name="Forecast", mode="lines+markers",
+                    line={"color": TEAL, "width": 2.6}, marker={"size": 5})
+    return style(fig, height=height, y="num", y_title="Units")

@@ -1,0 +1,5 @@
+# Shell scripts and container files must keep LF endings to run inside Linux images
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf

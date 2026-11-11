@@ -1,0 +1,33 @@
+# Keep the build context small and free of secrets
+.git
+.github
+.venv
+.venv-dbt
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.ruff_cache
+*.egg-info
+
+# Secrets and local credentials - never bake into an image
+.env
+.env.*
+!.env.example
+secrets
+**/.streamlit/secrets.toml
+*.p8
+*.pem
+.snowflake
+
+# Not needed at runtime
+dbt_inventory
+sql
+tests
+docs
+scripts
+service
+output
+logs
+*.md
+snowflake.yml
+pyproject.toml

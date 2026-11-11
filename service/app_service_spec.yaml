@@ -1,0 +1,28 @@
+# Snowpark Container Services specification for the Inventory 360 Streamlit app.
+# Used by: CREATE SERVICE ... FROM @INVENTORY_360_DB.APP.SERVICE_SPECS SPECIFICATION_FILE = 'app_service_spec.yaml'
+# Image path is /<database>/<schema>/<repository>/<image>:<tag> (lower case, leading slash).
+spec:
+  containers:
+    - name: inventory-360
+      image: /inventory_360_db/app/inv360_images/inventory-360:1.0.0
+      env:
+        PORT: "8501"
+        INV360_DATABASE: INVENTORY_360_DB
+        INV360_WAREHOUSE: INV360_WH
+        INV360_SCHEMA: MARTS
+      # Snowflake injects SNOWFLAKE_HOST / SNOWFLAKE_ACCOUNT and mounts the service
+      # OAuth token at /snowflake/session/token - the app uses those automatically.
+      resources:
+        requests:
+          cpu: 0.5
+          memory: 1Gi
+        limits:
+          cpu: 0.9
+          memory: 3Gi
+      readinessProbe:
+        port: 8501
+        path: /_stcore/health
+  endpoints:
+    - name: app
+      port: 8501
+      public: true

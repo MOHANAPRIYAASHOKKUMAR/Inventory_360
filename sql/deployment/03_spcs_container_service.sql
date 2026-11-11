@@ -1,0 +1,73 @@
+-- =============================================================================
+-- Inventory 360 | Snowpark Container Services deployment (container image path)
+-- NOT executed by the build. Run section by section on an SPCS-eligible account.
+-- Sections 3 and 5 START BILLABLE COMPUTE (compute pool nodes).
+-- Run as: ACCOUNTADMIN, or a role with CREATE COMPUTE POOL / BIND SERVICE ENDPOINT
+-- =============================================================================
+USE ROLE ACCOUNTADMIN;
+USE WAREHOUSE INV360_WH;
+USE SCHEMA INVENTORY_360_DB.APP;
+
+-- 1. Image repository (Snowpark Container Registry) - stores images, no compute
+CREATE IMAGE REPOSITORY IF NOT EXISTS INVENTORY_360_DB.APP.INV360_IMAGES
+  COMMENT = 'Inventory 360 container images';
+SHOW IMAGE REPOSITORIES IN SCHEMA INVENTORY_360_DB.APP;   -- copy repository_url for docker tag/push
+
+-- 2. Stage for service specification files
+CREATE STAGE IF NOT EXISTS INVENTORY_360_DB.APP.SERVICE_SPECS
+  DIRECTORY = (ENABLE = TRUE)
+  COMMENT = 'SPCS service specifications';
+-- Upload from the repo root (Snowflake CLI):
+--   snow stage copy service/app_service_spec.yaml @INVENTORY_360_DB.APP.SERVICE_SPECS --overwrite -c <connection>
+
+-- 3. Compute pool  *** BILLABLE while ACTIVE/IDLE ***
+CREATE COMPUTE POOL IF NOT EXISTS INV360_APP_POOL
+  MIN_NODES = 1
+  MAX_NODES = 1
+  INSTANCE_FAMILY = CPU_X64_XS
+  AUTO_RESUME = TRUE
+  AUTO_SUSPEND_SECS = 3600
+  COMMENT = 'Inventory 360 Streamlit container';
+DESCRIBE COMPUTE POOL INV360_APP_POOL;   -- wait for state IDLE / ACTIVE
+
+-- 4. Privileges for a non-ACCOUNTADMIN owner role (optional)
+-- GRANT USAGE, MONITOR ON COMPUTE POOL INV360_APP_POOL TO ROLE INV360_ADMIN;
+-- GRANT BIND SERVICE ENDPOINT ON ACCOUNT TO ROLE INV360_ADMIN;
+-- GRANT READ, WRITE ON IMAGE REPOSITORY INVENTORY_360_DB.APP.INV360_IMAGES TO ROLE INV360_ADMIN;
+
+-- 5. Service  *** BILLABLE ***
+CREATE SERVICE IF NOT EXISTS INVENTORY_360_DB.APP.INVENTORY_360_SVC
+  IN COMPUTE POOL INV360_APP_POOL
+  FROM @INVENTORY_360_DB.APP.SERVICE_SPECS
+  SPECIFICATION_FILE = 'app_service_spec.yaml'
+  QUERY_WAREHOUSE = INV360_WH
+  MIN_INSTANCES = 1
+  MAX_INSTANCES = 1
+  COMMENT = 'Inventory 360 Streamlit app (container)';
+
+-- 6. Status, logs and endpoint
+SELECT SYSTEM$GET_SERVICE_STATUS('INVENTORY_360_DB.APP.INVENTORY_360_SVC');
+SHOW SERVICE CONTAINERS IN SERVICE INVENTORY_360_DB.APP.INVENTORY_360_SVC;
+SELECT SYSTEM$GET_SERVICE_LOGS('INVENTORY_360_DB.APP.INVENTORY_360_SVC', 0, 'inventory-360', 100);
+SHOW ENDPOINTS IN SERVICE INVENTORY_360_DB.APP.INVENTORY_360_SVC;   -- ingress_url = app URL
+
+-- 7. Consumer access (the service runs as its owner role; consumers need the endpoint service role)
+GRANT USAGE ON DATABASE INVENTORY_360_DB TO ROLE INV360_VIEWER;
+GRANT USAGE ON SCHEMA INVENTORY_360_DB.APP TO ROLE INV360_VIEWER;
+GRANT SERVICE ROLE INVENTORY_360_DB.APP.INVENTORY_360_SVC!ALL_ENDPOINTS_USAGE TO ROLE INV360_VIEWER;
+
+-- 8. Update after pushing a new image tag (keeps the same ingress URL - do not drop/recreate)
+-- snow stage copy service/app_service_spec.yaml @INVENTORY_360_DB.APP.SERVICE_SPECS --overwrite
+-- ALTER SERVICE INVENTORY_360_DB.APP.INVENTORY_360_SVC
+--   FROM @INVENTORY_360_DB.APP.SERVICE_SPECS SPECIFICATION_FILE = 'app_service_spec.yaml';
+
+-- 9. Stop billing
+-- ALTER SERVICE INVENTORY_360_DB.APP.INVENTORY_360_SVC SUSPEND;
+-- ALTER COMPUTE POOL INV360_APP_POOL STOP ALL;
+-- ALTER COMPUTE POOL INV360_APP_POOL SUSPEND;
+
+-- 10. Remove everything
+-- DROP SERVICE IF EXISTS INVENTORY_360_DB.APP.INVENTORY_360_SVC;
+-- DROP COMPUTE POOL IF EXISTS INV360_APP_POOL;
+-- DROP IMAGE REPOSITORY IF EXISTS INVENTORY_360_DB.APP.INV360_IMAGES;   -- deletes stored images
+-- DROP STAGE IF EXISTS INVENTORY_360_DB.APP.SERVICE_SPECS;

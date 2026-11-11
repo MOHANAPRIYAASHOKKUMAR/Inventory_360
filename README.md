@@ -46,17 +46,24 @@ See [docs/architecture.md](docs/architecture.md) for detail.
 
 ## App modules
 
+Global sidebar filters (date range with 4W / 13W / 26W / 52W / YTD presets, warehouse, product category,
+supplier, product, customer) apply to every page; each page states which filters it honours. Filters are
+pushed down to Snowflake as parameterised SQL. Every page has KPI cards with red / amber / green status
+against policy targets (`inventory360.business_logic.exceptions`), interactive Plotly charts, a detail
+table with row drill-down, and CSV export.
+
 | Page | What it answers |
 | --- | --- |
-| Executive overview | Stock value, fill rate, OOS, stock turns, DIO, lost sales, budget variance, alerts |
-| Inventory health | Stock status by warehouse / category / SKU, days of cover, excess and ageing |
-| Replenishment planner | Reorder recommendations; planners edit and submit orders to `APP.REPLENISHMENT_REQUESTS` |
-| Demand forecast | Demand trend and short-range forecast by SKU / category |
-| Supplier performance | OTIF scorecard, lead-time variability, risk rating, spend |
-| Logistics & freight | Carrier / mode cost, on-time arrival, cost per pallet, CO₂ |
-| Warehouse network | Utilisation, capacity, opex and cost per unit across the 9 UK sites |
-| Budget & costs | Budget vs actual vs forecast, variance RAG, full-year outturn |
-| Data & governance | Data freshness, row counts, audit trail |
+| Executive overview | Sales, margin, stock value, availability, fill rate, lost sales, turns, cover; exception register; management attention |
+| Customers & sales | Sales, margin and fill rate by customer and channel; top customers; category mix; customer drill-down |
+| Inventory health | Stock status by warehouse, days of cover, warehouse × category heatmap, ABC analysis, SKU-location register |
+| Replenishment planner | Reorder recommendations and what-if levers; planners edit and submit orders to `APP.REPLENISHMENT_REQUESTS` |
+| Demand forecast | Weekly demand forecast with prediction interval, accuracy and bias; per-category forecasts |
+| Supplier performance | Spend, OTIF, lead time, risk matrix, scorecard with recommended action; open order book |
+| Logistics & freight | Landed cost, cost per pallet, on-time arrival, CO₂ by mode / carrier / site; shipments in flight |
+| Warehouse network | Utilisation, cost per unit and pallet, opex trend, cost categories by site |
+| Budget & costs | Budget vs actual for the date range, variance bridge, full-year outturn, cost-centre drill-down |
+| Data & governance | Freshness RAG, catalogue with column drill-down, lineage, KPI dictionary, access model, audit log |
 
 ## Getting started
 
@@ -107,6 +114,13 @@ $env:SNOWFLAKE_DEFAULT_CONNECTION_NAME = "<connection>"
 
 The script checks every manifest artifact exists, runs `snow streamlit deploy --replace`, grants app
 access to `INV360_PLANNER` / `INV360_VIEWER`, and verifies the object with `SHOW STREAMLITS`.
+
+### 3b. Container deployment (Docker / Snowpark Container Services)
+
+The app also ships as a Docker image (`Dockerfile`, `requirements.txt`) that runs locally and on
+Snowpark Container Services. See [docs/container_deployment.md](docs/container_deployment.md) for build,
+local test, registry push, compute pool, service, endpoint and teardown commands, and the trial-account
+eligibility findings.
 
 ### 4. Test
 

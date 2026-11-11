@@ -6,14 +6,16 @@
        as an empty stage entry and breaks the app on first load).
     2. snow streamlit deploy --replace
     3. Grant app usage to the planner and viewer roles.
-    4. Verify the STREAMLIT object exists.
+    4. Attach Snowflake's shared PyPI artifact repository (installs requirements.txt).
+    5. Verify the STREAMLIT object exists.
 .EXAMPLE
     .\scripts\deploy_streamlit.ps1 -Connection tbsljyv-rm91730
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Connection,
     [string]$AppFqn = "INVENTORY_360_DB.APP.INVENTORY_360",
-    [string[]]$GrantRoles = @("INV360_PLANNER", "INV360_VIEWER")
+    [string[]]$GrantRoles = @("INV360_PLANNER", "INV360_VIEWER"),
+    [string]$OwnerRole = "ACCOUNTADMIN"
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -38,6 +40,13 @@ Write-Host "== Granting usage"
 foreach ($role in $GrantRoles) {
     & $snow sql --connection $Connection -q "GRANT USAGE ON STREAMLIT $AppFqn TO ROLE $role"
 }
+
+# Plotly is not pre-installed in the container runtime. Snowflake's shared PyPI mirror
+# supplies requirements.txt packages without an external access integration (works on trial).
+Write-Host "== Attaching PyPI artifact repository"
+& $snow sql --connection $Connection -q "GRANT DATABASE ROLE SNOWFLAKE.PYPI_REPOSITORY_USER TO ROLE $OwnerRole"
+& $snow sql --connection $Connection -q "ALTER STREAMLIT $AppFqn SET ARTIFACT_REPOSITORIES = (snowflake.snowpark.pypi_shared_repository)"
+if ($LASTEXITCODE -ne 0) { throw "Could not attach the PyPI artifact repository (Plotly will be missing)" }
 
 Write-Host "== Verifying"
 $name = $AppFqn.Split(".")[-1]

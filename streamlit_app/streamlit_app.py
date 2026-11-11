@@ -1,6 +1,6 @@
 """Inventory 360 - Enterprise Supply Chain Intelligence Platform.
 
-Entry point for Streamlit in Snowflake and local development:
+Entry point for Streamlit in Snowflake, Snowpark Container Services and local development:
     streamlit run streamlit_app/streamlit_app.py
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ for path in (APP_DIR, APP_DIR.parent / "src"):
 
 import streamlit as st  # noqa: E402
 
-from components.layout import sidebar_filters  # noqa: E402
+from components import filters  # noqa: E402
 from inventory360 import __version__  # noqa: E402
 from inventory360.data_access import queries  # noqa: E402
 from inventory360.utils.config import APP_NAME, COMPANY_NAME  # noqa: E402
@@ -33,6 +33,7 @@ page = st.navigation(
     {
         "Overview": [
             st.Page(PAGES / "01_executive_overview.py", title="Executive overview", icon=":material/dashboard:", default=True),
+            st.Page(PAGES / "10_customers_and_sales.py", title="Customers & sales", icon=":material/storefront:"),
         ],
         "Inventory": [
             st.Page(PAGES / "02_inventory_health.py", title="Inventory health", icon=":material/inventory_2:"),
@@ -54,13 +55,16 @@ page = st.navigation(
     position="sidebar",
 )
 
-# Shared reference data drives the global filters on every page
-warehouses = queries.load_warehouses()
-categories = sorted(queries.load_products()["category"].unique().tolist())
-sidebar_filters(warehouses, categories)
+# Reference data (cached 1 h) drives the global filters on every page
+lo, hi = queries.load_date_bounds()
+st.session_state["gf_current"] = filters.render(
+    queries.load_warehouses(), queries.load_products(), queries.load_suppliers(), queries.load_customers(),
+    lo.date(), hi.date(),
+)
+st.session_state["gf_as_of"] = hi
 
 with st.sidebar:
     st.divider()
-    st.caption(f"{COMPANY_NAME} · UK retail & distribution  \nReporting currency GBP (£) · v{__version__}")
+    st.caption(f"{COMPANY_NAME} · UK retail & distribution  \nAll values in GBP (£) · v{__version__}")
 
 page.run()

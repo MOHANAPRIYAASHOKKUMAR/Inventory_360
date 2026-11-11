@@ -87,7 +87,8 @@ def main() -> None:
     for name in dependency_order(models):
         m = models[name]
         body = env.from_string(m["path"].read_text()).render().strip().rstrip(";")
-        cluster = " CLUSTER BY (snapshot_date)" if name == "fct_inventory_daily" else ""
+        keys = re.search(r"cluster_by\s*=\s*\[([^\]]*)\]", m["path"].read_text())
+        cluster = f" CLUSTER BY ({', '.join(k.strip(chr(39) + chr(34) + ' ') for k in keys.group(1).split(','))})" if keys else ""
         out.append(
             f"\n-- {m['path'].relative_to(ROOT).as_posix()}\n"
             f"CREATE OR REPLACE {m['materialized']} {DATABASE}.{m['schema']}.{name.upper()}{cluster} AS\n{body};"

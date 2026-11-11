@@ -1,87 +1,112 @@
-import altair as alt
-import pandas as pd
 import streamlit as st
 
-from components import charts
-from components.layout import active_filter_caption, apply_filters, kpi, page_header
+from components import charts, filters
+from components.layout import download, filter_scope, gbp, kpi, num, page_header, pct, section, table
+from inventory360.business_logic.exceptions import TARGETS, rag_for
 from inventory360.data_access import queries
+from inventory360.data_access.queries import UTILISATION_COLS
 from inventory360.utils.formatting import fmt_gbp, fmt_int, fmt_pct
 
-util_all = queries.load_warehouse_utilisation()
-costs_all = queries.load_warehouse_costs()
-as_of = util_all["period_month"].max()
+f = filters.current()
+page_header("Warehouse network", "Capacity utilisation, throughput and operating cost across UK distribution sites", f,
+            st.session_state["gf_as_of"])
+filter_scope(f, UTILISATION_COLS, note="monthly data; the start date is rounded to the first of its month")
 
-page_header("Warehouse network", "Capacity utilisation, throughput and operating cost across UK distribution sites",
-            ":material/warehouse:", queries.load_data_freshness()["as_of_date"].iloc[0])
-active_filter_caption()
+util = queries.warehouse_utilisation(f)
+util_p = queries.warehouse_utilisation(f.prior())
+costs = queries.warehouse_costs(f)
 
-util = apply_filters(util_all, category_col=None)
-costs = apply_filters(costs_all, category_col=None)
-current = util[util["period_month"] == as_of]
-closed_months = sorted(costs["period_month"].unique())
-last_closed = closed_months[-1] if closed_months else None
-ltm = util[(util["period_month"] > as_of - pd.DateOffset(months=12)) & util["opex_gbp"].notna()]
+with st.container(horizontal=True, vertical_alignment="bottom"):
+    site_types = st.pills("Site type", sorted(util["site_type"].dropna().unique()), selection_mode="multi", key="wh_types")
+    nations = st.pills("Nation", sorted(util["nation"].dropna().unique()), selection_mode="multi", key="wh_nations")
+if site_types:
+    util, util_p = util[util["site_type"].isin(site_types)], util_p[util_p["site_type"].isin(site_types)]
+if nations:
+    util, util_p = util[util["nation"].isin(nations)], util_p[util_p["nation"].isin(nations)]
+costs = costs[costs["warehouse_code"].isin(util["warehouse_code"].unique())]
 
-cols = st.columns(4)
+
+def totals(d):
+    latest = d[d["period_month"] == d["period_month"].max()] if not d.empty else d
+    cap = latest["capacity_pallets"].sum()
+    return {
+        "capacity": cap,
+        "avg_util": latest["avg_pallets_used"].sum() / cap if cap else None,
+        "peak_util": (latest["peak_pallets_used"] / latest["capacity_pallets"]).max() if not latest.empty else None,
+        "opex": d["opex_gbp"].sum(),
+        "dispatched": d["units_dispatched"].sum(),
+        "cpu": d["opex_gbp"].sum() / d["units_dispatched"].sum() if d["units_dispatched"].sum() else None,
+    }
+
+
+t, p = totals(util), totals(util_p)
+cols = st.columns(5)
 with cols[0]:
-    kpi("Network capacity", f"{fmt_int(current['capacity_pallets'].sum())} pallets", help=f"{len(current)} sites")
+    kpi("Pallet capacity", fmt_int(t["capacity"]), help=f"{util['warehouse_code'].nunique()} sites in filter")
 with cols[1]:
-    used = current["avg_pallets_used"].sum() / current["capacity_pallets"].sum() if len(current) else None
-    kpi("Average utilisation (MTD)", fmt_pct(used))
+    kpi("Average utilisation", fmt_pct(t["avg_util"]), current=t["avg_util"], previous=p["avg_util"], points=True,
+        help="Latest month: average pallets used ÷ capacity.")
 with cols[2]:
-    kpi("Operating cost (12 months)", fmt_gbp(ltm["opex_gbp"].sum()))
+    kpi("Peak site utilisation", fmt_pct(t["peak_util"]), status=rag_for("utilisation_peak", t["peak_util"]),
+        status_text=f"Alert above {fmt_pct(TARGETS['utilisation_peak'].green, 0)}", help="Highest single-site peak in the latest month.")
 with cols[3]:
-    cpu = ltm["opex_gbp"].sum() / max(ltm["units_dispatched"].sum(), 1)
-    kpi("Cost per unit dispatched", f"£{cpu:,.3f}", help="Last 12 closed months.")
+    kpi("Operating cost", fmt_gbp(t["opex"]), current=t["opex"], previous=p["opex"], inverse=True)
+with cols[4]:
+    kpi("Cost per unit dispatched", f"£{t['cpu']:,.3f}" if t["cpu"] else "–", current=t["cpu"], previous=p["cpu"], inverse=True)
 
-left, right = st.columns([2, 3])
+site = util.groupby(["warehouse_code", "warehouse_name", "site_type", "uk_region", "nation"], as_index=False).agg(
+    capacity=("capacity_pallets", "max"), avg_used=("avg_pallets_used", "mean"), peak_used=("peak_pallets_used", "max"),
+    dispatched=("units_dispatched", "sum"), received=("units_received", "sum"), opex=("opex_gbp", "sum"),
+    labour=("labour_cost_gbp", "sum"), stock=("avg_stock_value_gbp", "mean"))
+site["avg_util"] = site["avg_used"] / site["capacity"]
+site["peak_util"] = site["peak_used"] / site["capacity"]
+site["cpu"] = site["opex"] / site["dispatched"].where(site["dispatched"] > 0)
+site["cpp"] = site["opex"] / site["avg_used"].where(site["avg_used"] > 0)
+site["labour_share"] = site["labour"] / site["opex"].where(site["opex"] > 0)
+site["status"] = site["peak_util"].map(lambda v: rag_for("utilisation_peak", v))
+
+left, right = st.columns(2)
 with left:
-    with st.container(border=True, height="stretch"):
-        st.subheader("UK network", anchor=False)
-        st.caption("Bubble size = capacity, colour = current utilisation")
-        st.altair_chart(charts.uk_site_map(current, "capacity_pallets", "avg_utilisation_pct", height=460),
-                        alt="Map of UK distribution sites coloured by utilisation")
+    with section("Peak utilisation by site", "Max of monthly peak pallets ÷ capacity"):
+        charts.show(charts.bar(site.sort_values("peak_util", ascending=False), "warehouse_name", "peak_util", "status",
+                               kind="pct", horizontal=True, colors=charts.RAG_COLOURS, height=340),
+                    alt="Peak utilisation by warehouse")
 with right:
-    with st.container(border=True):
-        st.subheader("Site performance · last 12 months", anchor=False)
-        site = ltm.groupby(["warehouse_code", "warehouse_name", "site_type", "uk_region", "capacity_pallets"], as_index=False).agg(
-            avg_util=("avg_utilisation_pct", "mean"), peak_util=("peak_utilisation_pct", "max"),
-            units=("units_dispatched", "sum"), opex=("opex_gbp", "sum"), stock=("avg_stock_value_gbp", "mean"))
-        site["cost_per_unit"] = site["opex"] / site["units"]
-        site["cost_per_pallet_space"] = site["opex"] / site["capacity_pallets"]
-        st.dataframe(
-            site.sort_values("opex", ascending=False)[
-                ["warehouse_name", "site_type", "uk_region", "capacity_pallets", "avg_util", "peak_util", "units",
-                 "opex", "cost_per_unit", "cost_per_pallet_space", "stock"]],
-            hide_index=True, alt="Site performance table",
-            column_config={
-                "warehouse_name": "Site", "site_type": "Type", "uk_region": "Region",
-                "capacity_pallets": st.column_config.NumberColumn("Capacity", format="%,d"),
-                "avg_util": st.column_config.ProgressColumn("Avg utilisation", format="percent", min_value=0, max_value=1),
-                "peak_util": st.column_config.NumberColumn("Peak", format="percent"),
-                "units": st.column_config.NumberColumn("Units dispatched", format="compact"),
-                "opex": st.column_config.NumberColumn("Opex", format="£%,.0f"),
-                "cost_per_unit": st.column_config.NumberColumn("£ / unit", format="£%.3f"),
-                "cost_per_pallet_space": st.column_config.NumberColumn("£ / pallet space", format="£%.2f"),
-                "stock": st.column_config.NumberColumn("Avg stock", format="£%,.0f"),
-            },
-        )
-    with st.container(border=True):
-        st.subheader("Utilisation trend", anchor=False)
-        st.altair_chart(charts.line(util, "period_month", "avg_utilisation_pct", "warehouse_code", "Utilisation", pct=True, height=240),
-                        alt="Monthly utilisation by site")
+    with section("Cost efficiency", "Operating cost per unit dispatched vs throughput · bubble = capacity"):
+        charts.show(charts.scatter(site, "dispatched", "cpu", size="capacity", color="site_type", hover="warehouse_name",
+                                   x_kind="num", y_kind="gbp2", x_title="Units dispatched", y_title="£ per unit", height=340),
+                    alt="Cost per unit vs throughput by warehouse")
 
-with st.container(border=True):
-    st.subheader("Operating cost mix", anchor=False)
-    st.altair_chart(
-        alt.Chart(costs).mark_bar().encode(
-            x=alt.X("yearmonth(period_month):T", title=None, axis=alt.Axis(format="%b %y")),
-            y=alt.Y("sum(actual_cost_gbp):Q", title="Operating cost", axis=charts.GBP_AXIS),
-            color=alt.Color("cost_category:N", title=None, legend=alt.Legend(orient="bottom")),
-            tooltip=[alt.Tooltip("yearmonth(period_month):T", title="Month"), "cost_category:N",
-                     alt.Tooltip("sum(actual_cost_gbp):Q", title="Cost £", format=",.0f")],
-        ).properties(height=300),
-        alt="Monthly operating cost by category",
+with section("Operating cost trend", "Monthly opex by site"):
+    charts.show(charts.bar(util, "period_month", "opex_gbp", "warehouse_code", height=300), alt="Monthly operating cost by site")
+
+with section("Site scorecard", "Select a site to drill into utilisation and cost categories"):
+    sel = table(
+        site.sort_values("opex", ascending=False), key="wh_table", alt="Warehouse site scorecard", csv_name="warehouse scorecard",
+        rag_cols=["status"],
+        columns=["warehouse_code", "warehouse_name", "site_type", "uk_region", "capacity", "avg_util", "peak_util", "status",
+                 "dispatched", "received", "stock", "opex", "labour_share", "cpu", "cpp"],
+        column_config={"warehouse_code": "Code", "warehouse_name": "Warehouse", "site_type": "Type", "uk_region": "Region",
+                       "capacity": num("Capacity (pallets)"), "avg_util": pct("Avg utilisation"),
+                       "peak_util": pct("Peak utilisation"), "status": "RAG", "dispatched": num("Units dispatched"),
+                       "received": num("Units received"), "stock": gbp("Avg stock"), "opex": gbp("Operating cost"),
+                       "labour_share": pct("Labour share"), "cpu": gbp("£ / unit", 3), "cpp": gbp("£ / pallet", 2)},
     )
-    if last_closed is not None:
-        st.caption(f"GL actuals to {pd.Timestamp(last_closed):%B %Y} (latest closed period)")
+
+if sel is not None:
+    with section(f"Drill-down · {sel['warehouse_name']}", f"{sel['site_type']} · {sel['uk_region']} · capacity {sel['capacity']:,.0f} pallets"):
+        u = util[util["warehouse_code"] == sel["warehouse_code"]]
+        k = costs[costs["warehouse_code"] == sel["warehouse_code"]]
+        c1, c2 = st.columns(2)
+        with c1:
+            long = u.melt(id_vars="period_month", value_vars=["avg_utilisation_pct", "peak_utilisation_pct"],
+                          var_name="measure", value_name="util").replace(
+                {"avg_utilisation_pct": "Average", "peak_utilisation_pct": "Peak"})
+            charts.show(charts.line(long, "period_month", "util", "measure", kind="pct", height=300, markers=True,
+                                    target=TARGETS["utilisation_peak"].green, target_label="Alert level",
+                                    colors={"Average": charts.TEAL, "Peak": charts.NAVY}),
+                        alt=f"Monthly utilisation for {sel['warehouse_name']}")
+        with c2:
+            charts.show(charts.bar(k, "period_month", "actual_cost_gbp", "cost_category", height=300),
+                        alt=f"Monthly cost categories for {sel['warehouse_name']}")
+        download(k, f"{sel['warehouse_code']} cost detail", key="dl_wh_drill")

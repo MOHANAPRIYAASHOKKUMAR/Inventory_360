@@ -11,6 +11,7 @@ __pycache__/
 .streamlit/secrets.toml
 **/.streamlit/secrets.toml
 .env
+secrets/
 *.p8
 *.pem
 

@@ -1,98 +1,148 @@
-"""Page scaffolding: headers, KPI cards and shared sidebar filters."""
+"""Page scaffolding: header, filter scope, KPI cards, RAG chips, tables and CSV export."""
 from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from contextlib import contextmanager
+from datetime import date
 
 import pandas as pd
 import streamlit as st
 
+from inventory360.business_logic.exceptions import AMBER, GREEN, NA, RED
+from inventory360.data_access.filters import GlobalFilters, applicability
 from inventory360.utils.formatting import pct_change
 
-FILTER_WAREHOUSES = "flt_warehouses"
-FILTER_CATEGORIES = "flt_categories"
+RAG_BADGE = {GREEN: ("green", ":material/check_circle:"), AMBER: ("orange", ":material/error:"),
+             RED: ("red", ":material/cancel:"), NA: ("gray", ":material/remove:")}
+RAG_TEXT = {GREEN: "#15803D", AMBER: "#B45309", RED: "#B42318", NA: "#64748B"}
 
 
-def page_header(title: str, subtitle: str, icon: str, as_of=None) -> None:
+def page_header(title: str, subtitle: str, f: GlobalFilters | None = None, as_of=None) -> None:
     with st.container(horizontal=True, vertical_alignment="bottom"):
         with st.container():
-            st.title(title, anchor=False, icon=icon) if _title_supports_icon() else st.title(f"{icon} {title}", anchor=False)
+            st.title(title, anchor=False)
             st.caption(subtitle)
-        if as_of is not None:
-            st.badge(f"Data as of {pd.Timestamp(as_of):%d %b %Y}", icon=":material/schedule:", color="gray")
+        with st.container(horizontal=True, horizontal_alignment="right", width="content"):
+            if f is not None:
+                st.badge(f"{f.start:%d %b %Y} – {f.end:%d %b %Y}", icon=":material/date_range:", color="blue")
+            if as_of is not None:
+                st.badge(f"Data as of {pd.Timestamp(as_of):%d %b %Y}", icon=":material/schedule:", color="gray")
 
 
-def _title_supports_icon() -> bool:
-    import inspect
-    return "icon" in inspect.signature(st.title).parameters
+def filter_scope(f: GlobalFilters, columns: Mapping[str, str], *, use_date: bool = True, note: str | None = None) -> None:
+    """One-line statement of which global filters this page honours."""
+    applied, ignored = applicability(f, columns, use_date=use_date)
+    parts = []
+    if applied:
+        parts.append(f":material/filter_alt: Filtered by {', '.join(applied)}")
+    if not use_date:
+        parts.append("snapshot view (date range not applicable)")
+    if ignored:
+        parts.append(f"not applicable here: {', '.join(ignored)}")
+    if note:
+        parts.append(note)
+    if parts:
+        st.caption(" · ".join(parts))
 
 
-def kpi(label: str, value: str, current=None, previous=None, *, inverse: bool = False,
-        help: str | None = None, spark=None, as_points: bool = False, desc: str = "vs prior period") -> None:
-    """Bordered metric card with a period-over-period delta.
+def rag_badge(status: str, text: str | None = None) -> None:
+    colour, icon = RAG_BADGE.get(status, RAG_BADGE[NA])
+    st.badge(text or status, icon=icon, color=colour)
 
-    ``inverse=True`` flags metrics where a decrease is good (e.g. lost sales).
-    ``as_points=True`` shows the delta in percentage points (for ratios).
+
+def _delta(current, previous, *, points: bool) -> str | None:
+    if current is None or previous is None or pd.isna(current) or pd.isna(previous):
+        return None
+    if points:
+        return f"{(current - previous) * 100:+.1f} pts"
+    change = pct_change(current, previous)
+    return None if change is None else f"{change * 100:+.1f}%"
+
+
+def kpi(label: str, value: str, *, current=None, previous=None, inverse: bool = False, points: bool = False,
+        status: str | None = None, status_text: str | None = None, help: str | None = None, spark=None,
+        desc: str = "vs prior period") -> None:
+    """Bordered KPI card: value, period-over-period delta, optional sparkline and RAG chip.
+
+    ``inverse`` marks KPIs where a fall is good; ``points`` shows ratio deltas in percentage points.
     """
-    delta = None
-    if current is not None and previous is not None:
-        if as_points:
-            delta = round((current - previous) * 100, 2)
-            delta = f"{delta:+.2f} pts" if delta else 0
-        else:
-            change = pct_change(current, previous)
-            delta = f"{change * 100:+.1f}%" if change else (0 if change == 0 else None)
-    st.metric(
-        label,
-        value,
-        delta=delta,
-        delta_color="inverse" if inverse else "normal",
-        delta_description=desc if delta is not None else None,
-        help=help,
-        border=True,
-        chart_data=list(spark) if spark is not None else None,
-        chart_type="area",
-        height="stretch",
+    delta = _delta(current, previous, points=points)
+    with st.container(border=True, height="stretch", gap="small"):
+        st.metric(
+            label, value, delta=delta, delta_color="inverse" if inverse else "normal",
+            delta_description=desc if delta else None, help=help,
+            chart_data=list(spark) if spark is not None and len(spark) > 1 else None, chart_type="area",
+        )
+        if status:
+            rag_badge(status, status_text)
+
+
+@contextmanager
+def section(title: str, caption: str | None = None, *, height="content"):
+    with st.container(border=True, height=height):
+        st.subheader(title, anchor=False)
+        if caption:
+            st.caption(caption)
+        yield
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+
+
+def download(df: pd.DataFrame, name: str, *, label: str = "Download CSV", key: str | None = None) -> None:
+    """CSV export of exactly the rows shown (UTF-8 with BOM so Excel renders £ correctly)."""
+    st.download_button(
+        label, df.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"inventory360_{_slug(name)}_{date.today():%Y%m%d}.csv", mime="text/csv",
+        icon=":material/download:", key=key or f"dl_{_slug(name)}", on_click="ignore",
     )
 
 
-def sidebar_filters(warehouses: pd.DataFrame, categories: list[str]) -> None:
-    """Global site / category filters persisted in session state across pages."""
-    with st.sidebar:
-        st.subheader("Filters", anchor=False)
-        wh_labels = dict(zip(warehouses["warehouse_code"], warehouses["warehouse_name"]))
-        st.multiselect(
-            "Distribution sites",
-            options=list(wh_labels),
-            format_func=lambda c: f"{c} · {wh_labels[c]}",
-            key=FILTER_WAREHOUSES,
-            placeholder="All sites",
-        )
-        st.multiselect("Categories", options=categories, key=FILTER_CATEGORIES, placeholder="All categories")
-        st.button("Clear filters", icon=":material/filter_alt_off:", on_click=_clear_filters, width="stretch")
+def _style_rag(df: pd.DataFrame, rag_cols: list[str]):
+    def colour(v):
+        c = RAG_TEXT.get(v)
+        return f"color: {c}; font-weight: 600" if c else ""
+    return df.style.map(colour, subset=[c for c in rag_cols if c in df.columns])
 
 
-def _clear_filters() -> None:
-    st.session_state[FILTER_WAREHOUSES] = []
-    st.session_state[FILTER_CATEGORIES] = []
+def table(df: pd.DataFrame, *, key: str, column_config: dict | None = None, height: int | str = "auto",
+          rag_cols: list[str] | None = None, select: bool = True, alt: str, csv_name: str | None = None,
+          columns: list[str] | None = None) -> pd.Series | None:
+    """Detail table with optional RAG colouring, CSV export and single-row drill-down.
+
+    Returns the selected row (from ``df``) or None.
+    """
+    view = df[columns] if columns else df
+    view = view.reset_index(drop=True)
+    data = _style_rag(view, rag_cols) if rag_cols else view
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.caption(f"{len(view):,} rows" + (" · select a row to drill down" if select else ""))
+        if csv_name:
+            with st.container(horizontal=True, horizontal_alignment="right"):
+                download(view, csv_name, key=f"dl_{key}")
+    event = st.dataframe(
+        data, hide_index=True, height=height, key=key, alt=alt, column_config=column_config,
+        on_select="rerun" if select else "ignore", selection_mode="single-row",
+    )
+    if select and event and event.selection and event.selection.rows:
+        return df.reset_index(drop=True).iloc[event.selection.rows[0]]
+    return None
 
 
-def apply_filters(df: pd.DataFrame, warehouse_col: str | None = "warehouse_code",
-                  category_col: str | None = "category") -> pd.DataFrame:
-    out = df
-    whs = st.session_state.get(FILTER_WAREHOUSES) or []
-    cats = st.session_state.get(FILTER_CATEGORIES) or []
-    if whs and warehouse_col and warehouse_col in out.columns:
-        out = out[out[warehouse_col].isin(whs)]
-    if cats and category_col and category_col in out.columns:
-        out = out[out[category_col].isin(cats)]
-    return out
+# Reusable column formats (GBP always shown with £ and thousands separators)
+def gbp(label: str, decimals: int = 0, **kw):
+    return st.column_config.NumberColumn(label, format=f"£%,.{decimals}f", **kw)
 
 
-def active_filter_caption() -> None:
-    whs = st.session_state.get(FILTER_WAREHOUSES) or []
-    cats = st.session_state.get(FILTER_CATEGORIES) or []
-    if whs or cats:
-        parts = []
-        if whs:
-            parts.append(f"{len(whs)} site(s)")
-        if cats:
-            parts.append(", ".join(cats))
-        st.caption(f":material/filter_alt: Filtered to {' · '.join(parts)}")
+def pct(label: str, **kw):
+    return st.column_config.NumberColumn(label, format="percent", **kw)
+
+
+def num(label: str, decimals: int = 0, suffix: str = "", **kw):
+    return st.column_config.NumberColumn(label, format=f"%,.{decimals}f{suffix}", **kw)
+
+
+def day(label: str, **kw):
+    return st.column_config.DateColumn(label, format="DD MMM YYYY", **kw)

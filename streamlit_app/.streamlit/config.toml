@@ -6,33 +6,50 @@ folderWatchList = ["src"]
 [client]
 toolbarMode = "minimal"
 
+# Inventory 360 corporate theme: navy and white, teal accent, light grey canvas.
+# Locked light appearance (no [theme.light]/[theme.dark] sections).
 [theme]
 base = "light"
-primaryColor = "#1D4ED8"
-backgroundColor = "#F8FAFC"
-secondaryBackgroundColor = "#EEF2F7"
-textColor = "#0F172A"
-linkColor = "#1D4ED8"
-borderColor = "#D9E0EA"
+primaryColor = "#0F766E"               # teal 700 - passes contrast with white button text
+backgroundColor = "#F3F5F8"            # light grey canvas
+secondaryBackgroundColor = "#E6EBF1"   # widget fill, a step darker than the canvas
+textColor = "#0B2545"                  # navy body text
+linkColor = "#0F766E"
+borderColor = "#D3DAE3"
 font = "sans-serif"
 baseFontSize = 14
-baseRadius = "0.6rem"
+baseRadius = "0.5rem"
+buttonRadius = "0.4rem"
 showWidgetBorder = true
-showSidebarBorder = true
-dataframeHeaderBackgroundColor = "#E8EEF6"
-redColor = "#B42318"
-orangeColor = "#E04F16"
-yellowColor = "#F79009"
-greenColor = "#12B76A"
-blueColor = "#1D4ED8"
-violetColor = "#6941C6"
-chartCategoricalColors = ["#1D4ED8", "#0EA5E9", "#14B8A6", "#F59E0B", "#8B5CF6", "#EF4444", "#64748B", "#22C55E", "#EC4899", "#A16207"]
-chartSequentialColors = ["#EFF6FF", "#DBEAFE", "#BFDBFE", "#93C5FD", "#60A5FA", "#3B82F6", "#2563EB", "#1D4ED8", "#1E40AF", "#172554"]
+showSidebarBorder = false
+headingFontSizes = ["26px", "20px", "16px", "14px", "13px", "12px"]
+headingFontWeights = [700, 600, 600, 600, 600, 600]
+metricValueFontSize = "1.7rem"
+metricValueFontWeight = 700
+linkUnderline = false
+paddingTop = "1.5rem"
+paddingBottom = "2rem"
+dataframeHeaderBackgroundColor = "#0B2545"
+dataframeHeaderTextColor = "#FFFFFF"
+dataframeBorderColor = "#D3DAE3"
+# Exception (RAG) palette used by badges and coloured text
+redColor = "#C0392B"
+orangeColor = "#D97706"
+yellowColor = "#D97706"
+greenColor = "#15803D"
+blueColor = "#1E3A5F"
+violetColor = "#5B4B8A"
+grayColor = "#64748B"
+chartCategoricalColors = ["#0B2545", "#0F766E", "#5B8DB8", "#14B8A6", "#94A3B8", "#1E3A5F", "#7FB7B0", "#C49A3A", "#8C6B9E", "#3F6E8C"]
+chartSequentialColors = ["#F0FDFA", "#CCFBF1", "#99F6E4", "#5EEAD4", "#2DD4BF", "#14B8A6", "#0D9488", "#0F766E", "#115E59", "#134E4A"]
+chartDivergingColors = ["#991B1B", "#C0392B", "#E07A5F", "#F2B8A2", "#F8E1D8", "#D7EFEA", "#99D5CA", "#4FB3A2", "#0F766E", "#134E4A"]
 
+# Navy navigation rail with white text and a bright teal accent
 [theme.sidebar]
-backgroundColor = "#0B1F3A"
-secondaryBackgroundColor = "#13294B"
-textColor = "#E2E8F0"
+backgroundColor = "#0B2545"
+secondaryBackgroundColor = "#13315C"
+codeBackgroundColor = "#13315C"
+textColor = "#F1F5F9"
 borderColor = "#1E3A5F"
-primaryColor = "#60A5FA"
-linkColor = "#93C5FD"
+primaryColor = "#2DD4BF"
+linkColor = "#5EEAD4"

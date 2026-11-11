@@ -11,12 +11,13 @@ entities:
     query_warehouse: INV360_WH
     runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
     compute_pool: SYSTEM_COMPUTE_POOL_CPU
-    # No dependency file is shipped: trial accounts cannot create external access
-    # integrations, so the app relies on packages pre-installed in the container
-    # runtime (streamlit, pandas, numpy, altair, snowpark). On a paid account add
-    # pyproject.toml to artifacts and set external_access_integrations to a PyPI EAI.
+    # requirements.txt (repo root) is the dependency file: the container runtime searches
+    # upward from the entry point. Packages come from Snowflake's shared PyPI mirror
+    # (snowflake.snowpark.pypi_shared_repository), attached after deploy by
+    # scripts/deploy_streamlit.ps1 - no external access integration needed.
     main_file: streamlit_app/streamlit_app.py
     artifacts:
+      - requirements.txt
       - streamlit_app/streamlit_app.py
       - streamlit_app/.streamlit/config.toml
       - streamlit_app/assets/logo.svg
@@ -24,6 +25,7 @@ entities:
       - streamlit_app/components/__init__.py
       - streamlit_app/components/layout.py
       - streamlit_app/components/charts.py
+      - streamlit_app/components/filters.py
       - streamlit_app/pages/01_executive_overview.py
       - streamlit_app/pages/02_inventory_health.py
       - streamlit_app/pages/03_replenishment.py
@@ -33,6 +35,7 @@ entities:
       - streamlit_app/pages/07_budget_and_costs.py
       - streamlit_app/pages/08_demand_forecast.py
       - streamlit_app/pages/09_data_governance.py
+      - streamlit_app/pages/10_customers_and_sales.py
       - src/inventory360/__init__.py
       - src/inventory360/utils/__init__.py
       - src/inventory360/utils/config.py
@@ -40,10 +43,12 @@ entities:
       - src/inventory360/data_access/__init__.py
       - src/inventory360/data_access/connection.py
       - src/inventory360/data_access/queries.py
+      - src/inventory360/data_access/filters.py
       - src/inventory360/business_logic/__init__.py
       - src/inventory360/business_logic/replenishment.py
       - src/inventory360/business_logic/supplier.py
       - src/inventory360/business_logic/budget.py
+      - src/inventory360/business_logic/exceptions.py
       - src/inventory360/analytics/__init__.py
       - src/inventory360/analytics/abc.py
       - src/inventory360/analytics/forecasting.py

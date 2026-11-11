@@ -28,6 +28,34 @@ models:
       - name: warehouse_code
         tests: [unique, not_null]
 
+  - name: dim_customer
+    description: Customer accounts with their fulfilling distribution site.
+    columns:
+      - name: customer_id
+        tests: [unique, not_null]
+      - name: channel
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Own stores', 'Franchise', 'Wholesale', 'Online']
+      - name: warehouse_code
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_warehouse')
+                field: warehouse_code
+
+  - name: fct_customer_sales_daily
+    description: POS sales allocated to customers at day x site x SKU x customer grain; reconciles to stg_sales.
+    columns:
+      - name: customer_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customer')
+                field: customer_id
+
   - name: dim_date
     columns:
       - name: date_day
