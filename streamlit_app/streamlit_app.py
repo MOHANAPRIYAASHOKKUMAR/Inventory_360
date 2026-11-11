@@ -43,6 +43,12 @@ tier = access.override_tier() or access.tier_for_role(role)
 st.session_state["access_tier"] = tier
 st.session_state["viewer_role"] = role
 
+if identity["error"] == "identity_unavailable":
+    # Fail closed: without the viewer's caller's-rights token nothing runs as the app owner
+    st.title(APP_NAME)
+    st.error("Inventory 360 couldn't confirm who you are, so no data is shown. Reopen the app; "
+             "if this keeps happening, contact the Inventory 360 administrator.", icon=":material/lock:")
+    st.stop()
 if identity["error"] or role not in access.APP_ROLES and access.override_tier() is None:
     # No usable Inventory 360 role: explain how to get access, no stack trace
     st.title(APP_NAME)

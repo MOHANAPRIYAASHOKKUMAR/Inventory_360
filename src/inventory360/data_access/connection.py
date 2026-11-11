@@ -7,9 +7,9 @@ The connection mode is chosen from the environment, in this order:
    role, so Snowflake RBAC (and the CALLER grants on the app owner) enforce access.
    The connection is session-scoped and must be opened at the top of the entry
    script (``init_session``) while the 2-minute viewer token is valid.
-1. ``spcs``  - running in Snowpark Container Services: Snowflake mounts an OAuth
-   token at ``/snowflake/session/token`` and sets ``SNOWFLAKE_HOST`` /
-   ``SNOWFLAKE_ACCOUNT``. No secrets are stored in the image.
+1. ``spcs``  - self-hosted Snowpark Container Services acting as its own service role. Only
+   with ``INV360_ALLOW_SERVICE_IDENTITY=true``; inside Snowflake without a viewer token the
+   mode is ``denied`` (fail closed, never the app owner's identity).
 2. ``named`` - ``SNOWFLAKE_DEFAULT_CONNECTION_NAME`` selects an entry from
    ``~/.snowflake/connections.toml`` (local development).
 3. ``env``   - ``SNOWFLAKE_ACCOUNT`` + ``SNOWFLAKE_USER`` with ``SNOWFLAKE_PASSWORD``
@@ -57,11 +57,24 @@ def _callers_rights_available() -> bool:
         return False
 
 
+def _in_snowflake() -> bool:
+    return bool(os.getenv("SNOWFLAKE_HOST"))
+
+
+def _service_identity_allowed() -> bool:
+    # Self-hosted SPCS service that should act as its own service role (opt-in only)
+    return os.getenv("INV360_ALLOW_SERVICE_IDENTITY", "").lower() in {"1", "true", "yes"}
+
+
 def connection_mode() -> str:
-    if _callers_rights_available():
-        return "callers"
-    if SPCS_TOKEN_PATH.is_file() and os.getenv("SNOWFLAKE_HOST"):
-        return "spcs"
+    """Pick the connection mode. Inside Snowflake this fails closed: without the viewer's
+    caller's-rights token the app never falls back to the owner's identity."""
+    if _in_snowflake():
+        if _callers_rights_available():
+            return "callers"
+        if SPCS_TOKEN_PATH.is_file() and _service_identity_allowed():
+            return "spcs"
+        return "denied"
     if os.getenv("SNOWFLAKE_DEFAULT_CONNECTION_NAME"):
         return "named"
     if os.getenv("SNOWFLAKE_ACCOUNT") and os.getenv("SNOWFLAKE_USER"):
@@ -98,7 +111,8 @@ def _env_connection():
     params = {
         "account": os.environ["SNOWFLAKE_ACCOUNT"],
         "user": os.environ["SNOWFLAKE_USER"],
-        "role": os.getenv("SNOWFLAKE_ROLE", "INV360_PLANNER"),
+        # Least privilege by default: read-only unless the operator asks for a write role
+        "role": os.getenv("SNOWFLAKE_ROLE", "INV360_VIEWER"),
         **_context(),
     }
     if os.getenv("SNOWFLAKE_PRIVATE_KEY_FILE"):
@@ -121,6 +135,8 @@ def _callers_connection():
 
 def get_connection():
     mode = connection_mode()
+    if mode == "denied":
+        raise DataAccessDenied("Viewer identity unavailable: caller's-rights token missing")
     if mode == "callers":
         return _callers_connection()
     if mode == "spcs":
@@ -145,6 +161,10 @@ def init_session() -> dict:
         return st.session_state["inv360_identity"]
     mode = connection_mode()
     identity = {"mode": mode, "role": None, "user": None, "error": None}
+    if mode == "denied":
+        identity["error"] = "identity_unavailable"
+        st.session_state["inv360_identity"] = identity
+        return identity
     try:
         conn = get_connection()
         cur = conn.raw_connection.cursor()
