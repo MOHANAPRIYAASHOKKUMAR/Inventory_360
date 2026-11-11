@@ -168,6 +168,10 @@ def confirm_submission(lines_df: pd.DataFrame, value: float) -> None:
         except (access.AccessDenied, connection.DataAccessDenied):
             st.error("Your role can't submit orders. Ask for INV360_PLANNER access.", icon=":material/lock:")
             return
+        except ValueError:  # validation before the INSERT; nothing written
+            st.error("Some order lines are invalid (quantities must be whole numbers up to 1,000,000). "
+                     "Nothing was written - check the approved quantities.", icon=":material/error:")
+            return
         except Exception:  # nothing partially written (single INSERT)
             st.error("Submission failed. Nothing was written - please try again or contact the administrator.",
                      icon=":material/error:")

@@ -14,7 +14,15 @@ import pandas as pd
 from inventory360.data_access.connection import execute, run_query
 from inventory360.data_access.filters import GlobalFilters, build_where, product_scope
 from inventory360.utils import access
-from inventory360.utils.config import APP_SCHEMA, DATABASE, MARTS, STAGING, TTL_OPERATIONAL, TTL_REFERENCE
+from inventory360.utils.config import (
+    APP_SCHEMA,
+    DATABASE,
+    MARTS,
+    PRIORITY_ORDER,
+    STAGING,
+    TTL_OPERATIONAL,
+    TTL_REFERENCE,
+)
 
 # Filter dimensions supported by each source (dimension -> column)
 INVENTORY_COLS = {"date": "snapshot_date", "warehouse": "warehouse_code", "product": "sku", "category": "category"}
@@ -476,12 +484,36 @@ def load_replenishment_requests() -> pd.DataFrame:
     )
 
 
+MAX_ORDER_QTY = 1_000_000
+SUBMIT_PRIORITIES = frozenset(p for p in PRIORITY_ORDER if p != "None")
+
+
+def validate_submission(lines: pd.DataFrame) -> None:
+    """Reject order lines the UI should never produce (defence in depth before the INSERT)."""
+    errors = []
+    for name in ("approved_qty", "recommended_order_qty"):
+        qty = pd.to_numeric(lines[name], errors="coerce")
+        if qty.isna().any() or (qty != qty.round()).any() or (qty < 0).any() or (qty > MAX_ORDER_QTY).any():
+            errors.append(f"{name} must be a whole number from 0 to {MAX_ORDER_QTY:,}")
+    cost = pd.to_numeric(lines["unit_cost_gbp"], errors="coerce")
+    if cost.isna().any() or (cost < 0).any():
+        errors.append("unit_cost_gbp must be a non-negative number")
+    if not lines["replenishment_priority"].isin(SUBMIT_PRIORITIES).all():
+        errors.append("replenishment_priority must be one of P1-P4")
+    for name in ("warehouse_code", "sku", "supplier_id"):
+        if lines[name].isna().any() or (lines[name].astype(str).str.strip() == "").any():
+            errors.append(f"{name} is required on every line")
+    if errors:
+        raise ValueError("; ".join(errors))
+
+
 def submit_replenishment_requests(lines: pd.DataFrame, note: str) -> int:
     """Insert approved order lines in one batched statement; returns rows written."""
     if lines.empty:
         return 0
     # UI gate; Snowflake also rejects the INSERT for roles without the privilege
     access.require(access.Tier.PLANNER, "Submitting replenishment orders")
+    validate_submission(lines)
     placeholders = ", ".join(["(?, ?, ?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', ?)"] * len(lines))
     params: list = []
     for row in lines.itertuples(index=False):
@@ -495,7 +527,7 @@ def submit_replenishment_requests(lines: pd.DataFrame, note: str) -> int:
             float(row.unit_cost_gbp),
             round(float(row.approved_qty * row.unit_cost_gbp), 2),
             row.replenishment_priority,
-            note[:1000],
+            (note or "")[:1000],
         ]
     execute(
         f"""

@@ -12,7 +12,7 @@ import streamlit as st
 from inventory360.business_logic.exceptions import AMBER, GREEN, NA, RED
 from inventory360.business_logic.kpi_framework import KPIS, NO_DATA, NO_TARGET, KpiResult
 from inventory360.data_access.filters import GlobalFilters, applicability
-from inventory360.utils.formatting import fmt_days, fmt_gbp, fmt_int, fmt_pct, pct_change
+from inventory360.utils.formatting import csv_safe, fmt_days, fmt_gbp, fmt_int, fmt_pct, pct_change
 
 RAG_BADGE = {GREEN: ("green", ":material/check_circle:"), AMBER: ("orange", ":material/error:"),
              RED: ("red", ":material/cancel:"), NA: ("gray", ":material/remove:"),
@@ -161,9 +161,11 @@ def _slug(text: str) -> str:
 
 
 def download(df: pd.DataFrame, name: str, *, label: str = "Download CSV", key: str | None = None) -> None:
-    """CSV export of exactly the rows shown (UTF-8 with BOM so Excel renders £ correctly)."""
+    """CSV export of exactly the rows shown (UTF-8 with BOM so Excel renders £ correctly).
+
+    Text cells are escaped so free text (e.g. planner notes) can't run as a formula."""
     st.download_button(
-        label, df.to_csv(index=False).encode("utf-8-sig"),
+        label, csv_safe(df).to_csv(index=False).encode("utf-8-sig"),
         file_name=f"inventory360_{_slug(name)}_{date.today():%Y%m%d}.csv", mime="text/csv",
         icon=":material/download:", key=key or f"dl_{_slug(name)}", on_click="ignore",
     )

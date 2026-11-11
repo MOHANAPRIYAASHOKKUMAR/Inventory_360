@@ -3,6 +3,22 @@ from __future__ import annotations
 
 import math
 
+# Leading characters that make Excel / Sheets treat a cell as a formula (CSV injection)
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_safe(df):
+    """Copy of ``df`` whose text cells cannot run as spreadsheet formulas when opened.
+
+    Only string values are touched (prefixed with an apostrophe); numbers, including
+    negatives, stay numeric.
+    """
+    out = df.copy()
+    for col in out.select_dtypes(include=["object", "string"]).columns:
+        out[col] = out[col].map(
+            lambda v: f"'{v}" if isinstance(v, str) and v.startswith(_FORMULA_PREFIXES) else v)
+    return out
+
 
 def _is_missing(value) -> bool:
     return value is None or (isinstance(value, float) and math.isnan(value))
