@@ -27,10 +27,13 @@ def load_project() -> dict:
 
 
 def discover_models() -> dict[str, dict]:
+    """Layer from the folder; materialisation from dbt_project.yml (``+materialized`` per layer)."""
+    layers = load_project()["models"]["inventory_360"]
     models = {}
     for path in sorted((DBT_DIR / "models").rglob("*.sql")):
-        layer = "STAGING" if "staging" in path.parts else "MARTS"
-        materialized = "VIEW" if layer == "STAGING" else "TABLE"
+        key = "staging" if "staging" in path.parts else "marts"
+        layer = layers[key]["+schema"]
+        materialized = layers[key].get("+materialized", "view").upper()
         models[path.stem] = {"path": path, "schema": layer, "materialized": materialized}
     return models
 
