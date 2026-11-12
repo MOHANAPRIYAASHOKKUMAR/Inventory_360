@@ -24,6 +24,7 @@ service consume compute credits.
 | --- | --- |
 | `Dockerfile` | Multi-stage `python:3.11-slim-bookworm` image, non-root user, `linux/amd64`, built-in `HEALTHCHECK` |
 | `requirements.txt` | Pinned runtime dependencies (versions validated locally) |
+| `streamlit_app/requirements.txt` | Package list for the Streamlit-in-Snowflake container runtime (installed from PyPI); keep in step with the root file |
 | `.dockerignore` | Excludes venvs, git, secrets, dbt/SQL/docs/tests from the build context |
 | `docker/entrypoint.sh` | Startup command: detects auth mode, refuses to start without credentials, `exec streamlit run` |
 | `streamlit_app/.streamlit/config.toml` | Theme; container server settings are applied via `STREAMLIT_*` env vars in the Dockerfile |
@@ -44,10 +45,14 @@ Streamlit exposes `GET /_stcore/health` → `200 ok` when the server is ready. I
 
 | Mode | Triggered by | Used where |
 | --- | --- | --- |
-| `spcs` | `/snowflake/session/token` exists and `SNOWFLAKE_HOST` is set (injected by Snowflake) | Snowpark Container Services — no secrets in the image |
+| `callers` | `SNOWFLAKE_HOST` set, `/snowflake/session/token` exists and the request carries the viewer token header (`Sf-Context-Current-User-Token`); disable with `INV360_CALLERS_RIGHTS=false` | Streamlit in Snowflake (container runtime) — restricted caller's rights as the viewer's default role |
+| `spcs` | `SNOWFLAKE_HOST` set, `/snowflake/session/token` exists, no viewer token, and `INV360_ALLOW_SERVICE_IDENTITY=true` | Snowpark Container Services acting as the service owner role — no secrets in the image |
 | `named` | `SNOWFLAKE_DEFAULT_CONNECTION_NAME` | Local `streamlit run` with `~/.snowflake/connections.toml` |
 | `env` | `SNOWFLAKE_ACCOUNT` + `SNOWFLAKE_USER` + (`SNOWFLAKE_PRIVATE_KEY_FILE` or `SNOWFLAKE_PASSWORD`) | Local Docker |
 | `sis` | none of the above | Streamlit in Snowflake |
+
+Inside Snowflake (`SNOWFLAKE_HOST` set) with neither `callers` nor `spcs` available the mode is `denied`:
+the app fails closed rather than falling back to the owner's identity.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -91,7 +96,9 @@ eligible (paid / on-demand) account once Docker is installed and the local conta
    - **Programmatic access token:** Snowsight → *Settings* → *Authentication* → *Generate new token*.
      By default PATs only authenticate when the user is subject to a **network policy**; without one,
      authentication fails.
-4. **A role for the app user.** No `INV360_*` role is currently granted to any user:
+4. **A role for the app user.** The Streamlit-in-Snowflake app is owned by `INV360_ADMIN` and runs
+   under restricted caller's rights (`sql/roles/02_callers_rights.sql`); the container uses the role in
+   `SNOWFLAKE_ROLE`, which must be granted to the user it authenticates as, for example:
    ```sql
    GRANT ROLE INV360_VIEWER TO USER MohanaAshok;   -- INV360_PLANNER to test submit
    ```
@@ -137,7 +144,7 @@ Verify:
 docker logs inv360                                   # "Inventory 360 starting ... Snowflake auth: env (...)"
 Invoke-WebRequest http://localhost:8501/_stcore/health -UseBasicParsing | Select-Object StatusCode, Content   # 200 ok
 docker inspect --format '{{.State.Health.Status}}' inv360                        # healthy (after ~30 s)
-Start-Process http://localhost:8501                  # open all 9 pages; check for error boxes
+Start-Process http://localhost:8501                  # open all 10 pages; check for error boxes
 docker stop inv360
 ```
 

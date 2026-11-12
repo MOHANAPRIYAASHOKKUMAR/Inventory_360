@@ -13,7 +13,7 @@ with a planner write-back workflow.
  ERP · WMS · POS · TMS · FIN          Snowflake: INVENTORY_360_DB                         Consumers
  ─────────────────────────   ┌───────────┐   ┌───────────┐   ┌──────────────────┐   ┌─────────────────────┐
   source extracts  ────────▶ │    RAW    │──▶│  STAGING  │──▶│      MARTS       │──▶│ Streamlit in        │
-                             │ 9 tables  │   │ 9 views   │   │ dims · facts ·   │   │ Snowflake app       │
+                             │ 10 tables │   │ 10 tables │   │ dims · facts ·   │   │ Snowflake app       │
                              └───────────┘   └───────────┘   │ rpt_* KPI tables │   │ (APP.INVENTORY_360) │
                                                     dbt      └──────────────────┘   └──────────┬──────────┘
                                                                                                │ write-back
@@ -34,10 +34,11 @@ See [docs/architecture.md](docs/architecture.md) for detail.
 | `sql/roles/` | Functional roles (`INV360_ADMIN` / `ENGINEER` / `PLANNER` / `VIEWER`) and grants |
 | `sql/load/` | RAW table DDL and the deterministic synthetic data generator |
 | `sql/deployment/` | APP write-back objects; dbt models rendered to plain SQL (fallback path) |
-| `dbt_inventory/` | dbt project: `staging` views, `marts/core` dims & facts, `marts/reporting` KPI tables, tests |
+| `dbt_inventory/` | dbt project: `staging` tables, `marts/core` dims & facts, `marts/reporting` KPI tables, tests |
 | `src/inventory360/` | Python package: `data_access`, `business_logic`, `analytics`, `utils` |
 | `streamlit_app/` | Streamlit entry point, `pages/`, `components/`, `assets/`, theme |
 | `tests/` | pytest suite for business logic and analytics (no Snowflake needed) |
+| `streamlit_app/requirements.txt` | Packages installed in Streamlit in Snowflake from the shared PyPI artifact repository |
 | `scripts/` | Deployment and utility scripts |
 | `service/` | Design + spec for the ERP interface service that consumes the replenishment outbox |
 | `docs/` | Architecture, data model, KPI definitions, runbook, user guide |
@@ -63,7 +64,7 @@ table with row drill-down, and CSV export.
 | Logistics & freight | Landed cost, cost per pallet, on-time arrival, CO₂ by mode / carrier / site; shipments in flight |
 | Warehouse network | Utilisation, cost per unit and pallet, opex trend, cost categories by site |
 | Budget & costs | Budget vs actual for the date range, variance bridge, full-year outturn, cost-centre drill-down |
-| Data & governance | Freshness RAG, catalogue with column drill-down, lineage, KPI dictionary, access model, audit log |
+| Data & governance | Developer tier only (`INV360_ENGINEER`, `INV360_ADMIN`, `SYSADMIN`, `ACCOUNTADMIN`; see `inventory360.utils.access`). Freshness RAG, catalogue with column drill-down, lineage, KPI dictionary, access model, audit log |
 
 ## Getting started
 
@@ -74,7 +75,7 @@ Prerequisites: Python 3.11, Git, a Snowflake connection in `~/.snowflake/connect
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\pip install "streamlit[snowflake]==1.67.0" snowflake-snowpark-python pandas numpy altair pytest ruff pyyaml jinja2 snowflake-cli
+.venv\Scripts\pip install -r requirements.txt snowflake-cli pytest ruff pyyaml jinja2
 ```
 
 ### 1. Build the platform (first time only)
@@ -86,6 +87,7 @@ Run in order as `SYSADMIN`/`ACCOUNTADMIN`:
 .venv\Scripts\snow sql -c <connection> -f sql/roles/01_roles_and_grants.sql
 .venv\Scripts\snow sql -c <connection> -f sql/load/01_create_raw_tables.sql
 .venv\Scripts\snow sql -c <connection> -f sql/load/02_generate_synthetic_data.sql
+.venv\Scripts\snow sql -c <connection> -f sql/load/03_create_customers.sql
 ```
 
 Then build the models — either with dbt:
@@ -102,6 +104,17 @@ or, where dbt cannot authenticate (SSO-only accounts), from the rendered SQL:
 .venv\Scripts\snow sql -c <connection> -f sql/deployment/01_app_objects.sql
 ```
 
+Then apply the security scripts (after the models and APP objects exist):
+
+```powershell
+.venv\Scripts\snow sql -c <connection> -f sql/roles/02_callers_rights.sql   # ACCOUNTADMIN (in script)
+.venv\Scripts\snow sql -c <connection> -f sql/roles/03_hardening.sql
+```
+
+`sql/roles/04_account_security.sql` (MFA, break-glass user, password and authentication policies) is
+optional and not part of the run order: read its checklist and run it step by step. See SETUP.md for the
+exact roles and warehouse flags per step.
+
 ### 2. Run the app locally
 
 ```powershell
@@ -112,23 +125,28 @@ $env:SNOWFLAKE_DEFAULT_CONNECTION_NAME = "<connection>"
 ### 3. Deploy to Streamlit in Snowflake
 
 ```powershell
-.\scripts\deploy_streamlit.ps1 -Connection <connection>
+.\scripts\deploy_streamlit.ps1 -Connection <connection> -OwnerRole INV360_ADMIN
 ```
 
-The script checks every manifest artifact exists, runs `snow streamlit deploy --replace`, grants app
-access to `INV360_PLANNER` / `INV360_VIEWER`, and verifies the object with `SHOW STREAMLITS`.
+The script checks every manifest artifact exists, runs `snow streamlit deploy --replace` as the owner
+role, grants app access to `INV360_PLANNER` / `INV360_VIEWER`, attaches the PyPI artifact repository
+and verifies the object with `SHOW STREAMLITS`. A redeploy with `--replace` recreates the object, which
+drops its grants and artifact repositories, so always deploy through the script: it re-grants and runs
+`ALTER STREAMLIT ... SET ARTIFACT_REPOSITORIES = (snowflake.snowpark.pypi_shared_repository)`.
+Packages are installed from `streamlit_app/requirements.txt`.
 
 ### 3b. Container deployment (Docker / Snowpark Container Services)
 
 The app also ships as a Docker image (`Dockerfile`, `requirements.txt`) that runs locally and on
 Snowpark Container Services. See [docs/container_deployment.md](docs/container_deployment.md) for build,
 local test, registry push, compute pool, service, endpoint and teardown commands, and the trial-account
-eligibility findings.
+eligibility findings. The image is prepared but has not been built or deployed.
 
 ### 4. Test
 
 ```powershell
 .venv\Scripts\python -m pytest
+.venv\Scripts\python scripts/e2e_smoke.py   # end-to-end smoke test against live Snowflake data
 .venv\Scripts\ruff check src streamlit_app tests
 ```
 

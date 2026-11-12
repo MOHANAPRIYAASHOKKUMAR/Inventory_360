@@ -91,7 +91,9 @@ All commands below use `-c inv360`; replace it with your connection name.
 
 Account sign-in hardening (MFA, break-glass admin, password and authentication policies) is in
 `sql/roles/04_account_security.sql`. It is **not** part of the run order: read its checklist and run
-it section by section, keeping one admin session open.
+it section by section, keeping one admin session open. It creates the break-glass user
+`INV360_BREAKGLASS` (granted `ACCOUNTADMIN`). Its network policy section (`INV360_NETWORK_POLICY`) is
+commented out and is not applied by running the script.
 
 ```powershell
 $c = "inv360"
@@ -130,6 +132,8 @@ nulls, referential integrity, business rules, staging-to-raw reconciliation and 
 The script checks every artifact in `snowflake.yml` exists, deploys with `--replace`, grants
 usage to `INV360_VIEWER` / `INV360_PLANNER`, attaches Snowflake's shared PyPI repository (so
 Plotly installs; no external access integration needed) and confirms the object with `SHOW STREAMLITS`.
+The packages installed from PyPI are read from `streamlit_app/requirements.txt` (beside the entry
+point), not the root `requirements.txt`.
 
 The user running the deploy must be able to use `INV360_ADMIN`; for example:
 `GRANT ROLE INV360_ADMIN TO USER <you>;`.
@@ -159,6 +163,9 @@ $env:SNOWFLAKE_DEFAULT_CONNECTION_NAME = "inv360"
   ignored inside Snowflake.
 - Tests: `.venv\Scripts\python -m pytest tests` and `.venv\Scripts\ruff check src streamlit_app tests`.
 - Headless page smoke test against Snowflake: `.venv\Scripts\python scripts/smoke_pages.py`.
+- End-to-end smoke test (pages per tier, filters, controls, drill-downs, write path, data and security
+  checks): `.venv\Scripts\python scripts/e2e_smoke.py`. The write path inserts replenishment rows and
+  then removes them; add `--no-write` to skip it.
 
 ---
 

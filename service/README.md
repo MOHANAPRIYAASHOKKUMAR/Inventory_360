@@ -12,7 +12,7 @@ purchase orders in the ERP.
 | Status lifecycle | `SUBMITTED` → `APPROVED` → `SENT_TO_ERP` (or `REJECTED`) |
 | Idempotency key | `REQUEST_ID` (UUID) — sent as the ERP external reference |
 | Audit | Every transition writes a row to `APP.APP_AUDIT_LOG` (`EVENT_TYPE = 'ERP_SYNC'`) |
-| Role | `INV360_ENGINEER` (needs UPDATE on `REPLENISHMENT_REQUESTS`, INSERT on `APP_AUDIT_LOG`) |
+| Role | Needs UPDATE on `REPLENISHMENT_REQUESTS` and INSERT on `APP_AUDIT_LOG`. `INV360_ENGINEER` does **not** have UPDATE: after `sql/roles/03_hardening.sql` it inherits only INSERT on both tables (via `INV360_PLANNER`) plus SELECT on `APP_AUDIT_LOG`, and order status changes stay with `INV360_ADMIN`. Run the service as `INV360_ADMIN`, or grant UPDATE on `REPLENISHMENT_REQUESTS` to a dedicated service role before deploying |
 
 ## Processing loop
 
@@ -23,8 +23,10 @@ purchase orders in the ERP.
 
 ## Deployment options
 
-- **Snowpark Container Services** job on a schedule (`spec.yaml` in this folder), with an external access
-  integration to the ERP host. Requires a non-trial account.
+- **Snowpark Container Services** job on a schedule (`spec.yaml` in this folder: the `erp-outbox-sync`
+  job run with `EXECUTE JOB SERVICE`), with an external access integration to the ERP host. Requires a
+  non-trial account. `app_service_spec.yaml` in the same folder is unrelated to this service: it is the
+  long-running Streamlit app service described in `docs/container_deployment.md`.
 - **Snowflake task + stored procedure** calling an external function, if the ERP exposes an API gateway.
 
 ## Why not built yet

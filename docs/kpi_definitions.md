@@ -10,7 +10,7 @@ All monetary values are GBP. Source model shown for each KPI.
 | Fill rate | Units sold ÷ units demanded |
 | On-shelf availability | 1 − OOS rate |
 | OOS rate | SKU-location-days with zero stock ÷ all SKU-location-days |
-| Lost sales | (Units demanded − units sold) × unit price |
+| Lost sales | max(units demanded − units sold, 0) × unit price |
 | Stock turns (annualised) | (COGS × 365 ÷ trading days) ÷ average stock value |
 | Days inventory outstanding (DIO) | Average stock value × trading days ÷ COGS |
 | Holding cost | Average stock value × 22% ÷ 12 (dbt var `holding_cost_rate`) |
@@ -95,3 +95,45 @@ buffer) using `inventory360.business_logic.replenishment.recalculate_plan`.
 | Variance % | Variance ÷ budget |
 | RAG | Green ≤ 3%, Amber ≤ 7%, Red > 7% absolute variance (`VARIANCE_AMBER`, `VARIANCE_RED`) |
 | Outturn | Actuals for closed months + forecast for remaining months of the fiscal year |
+
+## Customers and sales (`FCT_CUSTOMER_SALES_DAILY`)
+
+Grain: day × site × SKU × customer. Each site's daily POS sales (`stg_sales`) are allocated across the
+active customers that site serves using a channel × category mix weight; shares are normalised within
+site × category so customer totals reconcile to `stg_sales`. Aggregated by customer (joined to
+`DIM_CUSTOMER`) and filtered by channel on the Customers & sales page.
+
+| KPI | Definition |
+| --- | --- |
+| Net sales | Σ allocated net sales |
+| Gross profit | Σ (net sales − units sold × unit cost) × share |
+| Gross margin | Gross profit ÷ net sales (by customer, channel or total) |
+| Customer fill rate | Units sold ÷ units demanded (by customer, channel or total) |
+| Lost sales | Σ allocated units lost × unit price |
+| Active customers | Customers with net sales > 0 in the period |
+| Top-5 share | Net sales of the five largest customers ÷ total net sales |
+| Sales share | Customer net sales ÷ total net sales |
+| Growth vs prior | Net sales ÷ prior-period net sales − 1 |
+| SKUs bought | Distinct SKUs with allocated sales |
+
+Margin and fill rate are rated against the `gross_margin` and `fill_rate` targets below.
+
+## RAG policy targets (`inventory360.business_logic.exceptions.TARGETS`)
+
+Green if the value meets the green threshold, Amber if it meets the amber threshold, otherwise Red;
+missing values are `n/a`. Direction depends on `higher_is_better`.
+
+| Key | KPI | Green | Amber | Direction |
+| --- | --- | --- | --- | --- |
+| `availability` | On-shelf availability | ≥ 96% | ≥ 93% | Higher is better |
+| `fill_rate` | Demand fill rate | ≥ 97% | ≥ 94% | Higher is better |
+| `otif` | Supplier OTIF | ≥ 90% | ≥ 80% | Higher is better |
+| `on_time_arrival` | On-time arrival | ≥ 92% | ≥ 85% | Higher is better |
+| `gross_margin` | Gross margin | ≥ 35% | ≥ 30% | Higher is better |
+| `forecast_accuracy` | Forecast accuracy | ≥ 85% | ≥ 75% | Higher is better |
+| `stock_turns` | Stock turn | ≥ 8.0 | ≥ 6.0 | Higher is better |
+| `days_cover` | Days of cover | ≤ 45 days | ≤ 60 days | Lower is better |
+| `utilisation_peak` | Peak utilisation | ≤ 85% | ≤ 92% | Lower is better |
+| `budget_variance` | Budget variance | ≤ 3% | ≤ 7% | Lower is better |
+| `lost_sales_share` | Lost sales % of sales | ≤ 2% | ≤ 4% | Lower is better |
+| `freshness_hours` | Data age (hours) | ≤ 30 | ≤ 54 | Lower is better |

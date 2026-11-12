@@ -2,6 +2,12 @@
 
 All objects live in `INVENTORY_360_DB`. Grain is stated for every mart table.
 
+## Raw and staging (`RAW`, `STAGING`)
+
+Source extracts land in `RAW` and are cleaned 1:1 into `STAGING` views by dbt (`stg_*`). For customers,
+`RAW.ERP_CUSTOMERS` (created by `sql/load/03_create_customers.sql`) feeds `STG_CUSTOMERS`, which trims the
+name, renames `HOME_WAREHOUSE_CODE` to `WAREHOUSE_CODE` and `ACTIVE_FLAG` to `IS_ACTIVE`.
+
 ## Dimensions (`MARTS`)
 
 | Table | Grain | Key | Notes |
@@ -20,6 +26,9 @@ All objects live in `INVENTORY_360_DB`. Grain is stated for every mart table.
 | `FCT_PURCHASE_ORDERS` | PO line | Ordered / received qty and value, expected vs received date, days late, on-time / in-full / OTIF flags, contract vs actual lead time |
 | `FCT_SHIPMENTS` | Shipment | Carrier, mode, pallets, freight, duty, landed cost, CO₂, transit and delay days, on-time arrival |
 | `FCT_CUSTOMER_SALES_DAILY` | Day × site × SKU × customer | POS sales allocated to the customers each site serves (channel × category mix weights, normalised per site and category); demand, sold, lost units, net sales, COGS, gross profit, lost sales. Reconciles exactly to `STG_SALES` (test `assert_customer_sales_reconcile`) |
+
+Used by: `DIM_CUSTOMER` and `FCT_CUSTOMER_SALES_DAILY` are read by Customers & sales and Executive
+overview (channel sales); `DIM_CUSTOMER` also populates the global customer filter.
 
 ## Reporting tables (`MARTS`)
 
