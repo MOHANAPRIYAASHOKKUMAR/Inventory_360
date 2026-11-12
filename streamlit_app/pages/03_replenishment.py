@@ -81,7 +81,8 @@ with left:
         by_sup = recs_all.groupby(["supplier_name", "scenario_priority"], as_index=False)["scenario_order_value_gbp"].sum()
         top = by_sup.groupby("supplier_name")["scenario_order_value_gbp"].sum().nlargest(15).index.tolist()
         charts.show(charts.bar(by_sup[by_sup["supplier_name"].isin(top)], "supplier_name", "scenario_order_value_gbp",
-                               "scenario_priority", horizontal=True, order=top, colors=PRIORITY_COLOURS, height=420),
+                               "scenario_priority", horizontal=True, order=top, colors=PRIORITY_COLOURS, height=420,
+                               value_title="Order value (£)", category_title="Supplier"),
                     alt="Recommended order value by supplier and priority")
 with right:
     with section("Plan by priority", "Recommended order value", height="stretch"):
@@ -207,7 +208,7 @@ with section("SKU drill-down", "Inspect the stock and demand history behind a re
                          value_name="units").replace({"qty_on_hand": "On hand", "units_demanded": "Demand"})
         charts.show(charts.line(long, "snapshot_date", "units", "measure", kind="num", height=300,
                                 target=float(row["scenario_reorder_point"]), target_label="Scenario reorder point",
-                                colors={"On hand": charts.NAVY, "Demand": charts.TEAL}),
+                                colors={"On hand": charts.NAVY, "Demand": charts.TEAL}, y_title="Units", x_title="Date"),
                     alt="Stock and demand history for the selected recommendation")
 
 with st.expander("ERP outbox · submitted orders awaiting interface", icon=":material/outbox:"):

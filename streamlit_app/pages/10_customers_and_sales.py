@@ -64,7 +64,8 @@ with left:
     with section("Sales trend by channel", f"{grain} net sales"):
         trend = bucket(cur_d, "sales_date", grain, ["net_sales_gbp"], by=["channel"])
         charts.show(charts.bar(trend, "period", "net_sales_gbp", "channel", height=320,
-                               order=CHANNELS), alt="Net sales trend by channel")
+                               order=CHANNELS, value_title="Net sales (£)", category_title="Period"),
+                    alt="Net sales trend by channel")
 with right:
     with section("Channel mix", "Share of net sales", height="stretch"):
         mix = summary.groupby("channel", as_index=False)["net_sales_gbp"].sum()
@@ -76,7 +77,8 @@ with left:
     with section(f"Top {top_n} customers", "Net sales in the period"):
         top = summary.nlargest(int(top_n), "net_sales_gbp")
         charts.show(charts.bar(top, "customer_name", "net_sales_gbp", "channel", horizontal=True, height=34 * len(top) + 80,
-                               order=top["customer_name"].tolist()), alt="Top customers by net sales")
+                               order=top["customer_name"].tolist(),
+                               value_title="Net sales (£)", category_title="Customer"), alt="Top customers by net sales")
 with right:
     with section("Category mix by channel", "Net sales (£)"):
         cm = queries.customer_category_mix(f)
@@ -119,7 +121,8 @@ if sel is not None:
         wk = queries.customer_weekly(f, sel["customer_id"])
         c1, c2 = st.columns([3, 2])
         with c1:
-            charts.show(charts.bar(wk, "week", "net_sales_gbp", "category", height=320),
+            charts.show(charts.bar(wk, "week", "net_sales_gbp", "category", height=320,
+                                   value_title="Net sales (£)", category_title="Week"),
                         alt=f"Weekly net sales by category for {sel['customer_name']}")
         with c2:
             cat = wk.groupby("category", as_index=False)[["net_sales_gbp", "lost_sales_gbp"]].sum() \

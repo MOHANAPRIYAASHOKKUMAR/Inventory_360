@@ -62,7 +62,9 @@ with tab_status:
     if basis == "SKU-locations":
         by_wh = position.groupby(["warehouse_name", "stock_status"], as_index=False).agg(stock_value_gbp=("sku", "count"))
     charts.show(charts.bar(by_wh, "warehouse_name", "stock_value_gbp", "stock_status", horizontal=True, height=380,
-                           colors=charts.STATUS_COLOURS, kind="num" if basis == "SKU-locations" else "gbp"),
+                           colors=charts.STATUS_COLOURS, kind="num" if basis == "SKU-locations" else "gbp",
+                           value_title="SKU-locations" if basis == "SKU-locations" else "Stock value (£)",
+                           category_title="Warehouse"),
                 alt="Stock status mix by warehouse")
 with tab_cover:
     bins = [-0.1, 0, 3, 7, 14, 30, 60, 120, float("inf")]
@@ -72,7 +74,7 @@ with tab_cover:
     band["risk"] = band["cover_band"].map(lambda b: "Red" if b in ("0", "0-3") else "Amber" if b in ("3-7", "60-120")
                                           else "Red" if b == "120+" else "Green")
     charts.show(charts.bar(band, "cover_band", "stock_value_gbp", "risk", order=labels, colors=charts.RAG_COLOURS,
-                           height=340, value_title="Stock value"),
+                           height=340, value_title="Stock value (£)", category_title="Days of cover"),
                 alt="Stock value by days-of-cover band")
     st.caption("Days of cover = stock on hand ÷ average daily demand over the last 28 days. Red: under 3 days or over 120; "
                "amber: 3-7 or 60-120 days.")
@@ -91,7 +93,7 @@ with tab_abc:
     c1, c2 = st.columns([2, 1])
     with c1:
         fig = charts.line(abc_curve, "rank_pct", "cumulative_share", "abc_class", kind="pct", height=320,
-                          colors={"A": charts.NAVY, "B": charts.TEAL, "C": charts.SLATE})
+                          colors={"A": charts.NAVY, "B": charts.TEAL, "C": charts.SLATE}, y_title="Cumulative share of sales (%)")
         fig.update_xaxes(tickformat=".0%", title="Share of SKUs (ranked by 28-day sales)")
         charts.show(fig, alt="Pareto curve of 28-day sales")
     with c2:
@@ -135,7 +137,7 @@ if sel is not None:
                              value_name="units").replace({"qty_on_hand": "On hand", "units_demanded": "Demand"})
             fig = charts.line(long, "snapshot_date", "units", "measure", kind="num", height=320,
                               target=float(sel["reorder_point_qty"]), target_label="Reorder point",
-                              colors={"On hand": charts.NAVY, "Demand": charts.TEAL})
+                              colors={"On hand": charts.NAVY, "Demand": charts.TEAL}, y_title="Units", x_title="Date")
             charts.show(fig, alt="Daily on-hand stock and demand for the selected SKU-location")
         with c2:
             st.metric("Safety stock", f"{sel['safety_stock_qty']:,.0f} units", border=True)

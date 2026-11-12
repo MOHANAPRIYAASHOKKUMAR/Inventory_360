@@ -88,7 +88,7 @@ with right:
         region_colours = dict(zip(sorted(trend["sourcing_region"].dropna().unique()), [charts.NAVY, charts.TEAL, charts.SLATE]))
         fig = charts.line(trend, "period_month", "otif_rate", "sourcing_region", kind="pct", height=400, markers=True,
                           colors=region_colours, target=TARGETS["otif"].green, target_label=f"Target {TARGETS['otif'].green:.0%}",
-                          y_title="OTIF (%)")
+                          y_title="OTIF (%)", x_title="Month")
         fig.update_traces(marker={"size": 5}, line={"width": 2})
         fig.update_layout(legend={"font": {"size": 10}, "title": None})
         fig.update_xaxes(title={"text": "Order month", "font": {"size": 12}}, tickformat="%b %y")
@@ -96,7 +96,8 @@ with right:
 
 with section("Spend by month and region"):
     sp = monthly.groupby(["period_month", "sourcing_region"], as_index=False)["spend_gbp"].sum()
-    charts.show(charts.bar(sp, "period_month", "spend_gbp", "sourcing_region", height=280), alt="Monthly spend by region")
+    charts.show(charts.bar(sp, "period_month", "spend_gbp", "sourcing_region", height=280,
+                           value_title="Spend (£)", category_title="Month"), alt="Monthly spend by region")
 
 with section("Supplier scorecard", "Select a supplier to drill into monthly performance and open orders"):
     view = view.assign(
@@ -131,10 +132,10 @@ if sel is not None:
         m = monthly[monthly["supplier_id"] == sel["supplier_id"]]
         c1, c2 = st.columns(2)
         with c1:
-            charts.show(charts.combo(m, "period_month", "spend_gbp", "otif_rate", "Spend", "OTIF",
+            charts.show(charts.combo(m, "period_month", "spend_gbp", "otif_rate", "Spend (£)", "OTIF (%)", x_title="Month",
                                      line_target=TARGETS["otif"].green, height=300), alt="Monthly spend and OTIF for supplier")
         with c2:
-            charts.show(charts.bar(m, "period_month", "avg_days_late", kind="dec", height=300, value_title="Avg days late",
+            charts.show(charts.bar(m, "period_month", "avg_days_late", kind="dec", height=300, value_title="Avg days late", category_title="Month",
                                    single_colour=charts.AMBER), alt="Monthly average days late for supplier")
         po = queries.open_purchase_orders(f)
         po = po[po["supplier_id"] == sel["supplier_id"]]

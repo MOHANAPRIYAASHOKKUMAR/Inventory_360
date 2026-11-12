@@ -67,7 +67,7 @@ with left:
         m["value"] = m["actual"].where(m["closed"], m["forecast"].where(m["forecast"] > 0, m["budget"]))
         m["type"] = m["closed"].map({True: "Actual", False: "Forecast"})
         fig = charts.bar(m, "period_month", "value", "type", colors={"Actual": charts.NAVY, "Forecast": "#B8C7D9"},
-                         height=330, stacked=False)
+                         height=330, stacked=False, value_title="Cost (£)", category_title="Month")
         fig.add_scatter(x=m["period_month"], y=m["budget"], name="Budget", mode="lines+markers",
                         line={"color": charts.TEAL, "width": 2.2, "dash": "dot"})
         charts.show(fig, alt="Monthly actual and forecast against budget")
@@ -76,6 +76,7 @@ with right:
         by_area = closed.groupby("budget_area", as_index=False)[["budget_gbp", "actual_gbp"]].sum()
         by_area["variance"] = by_area["actual_gbp"] - by_area["budget_gbp"]
         charts.show(charts.waterfall(by_area["budget_area"].tolist(), by_area["variance"].tolist(), total_label="Net variance",
+                                     x_title="Budget area", y_title="Variance vs budget (£)",
                                      height=330), alt="Variance by budget area")
 
 with section(f"{fy} full-year outturn by area"):
@@ -106,7 +107,8 @@ with section("Cost centre variance", "Closed months in the date range · select 
         top = cc.reindex(cc["variance"].abs().sort_values(ascending=False).index).head(12)
         top = top.assign(direction=top["variance"].map(lambda v: "Red" if v > 0 else "Green"))
         charts.show(charts.bar(top, "dimension_key", "variance", "direction", horizontal=True, colors=charts.RAG_COLOURS,
-                               height=380, order=top["dimension_key"].tolist()), alt="Largest cost centre variances")
+                               height=380, order=top["dimension_key"].tolist(),
+                               value_title="Variance vs budget (£)", category_title="Cost centre"), alt="Largest cost centre variances")
 
 if sel is not None:
     with section(f"Drill-down · {sel['budget_area']} · {sel['dimension_key']}"):
@@ -115,7 +117,7 @@ if sel is not None:
         long = d.melt(id_vars="period_month", value_vars=["budget_gbp", "actual_gbp", "forecast_gbp"], var_name="series",
                       value_name="gbp").dropna().replace({"budget_gbp": "Budget", "actual_gbp": "Actual", "forecast_gbp": "Forecast"})
         charts.show(charts.line(long, "period_month", "gbp", "series", height=300, markers=True,
-                                colors={"Budget": charts.TEAL, "Actual": charts.NAVY, "Forecast": charts.SLATE}),
+                                colors={"Budget": charts.TEAL, "Actual": charts.NAVY, "Forecast": charts.SLATE}, y_title="Amount (£)", x_title="Month"),
                     alt="Monthly budget, actual and forecast for the selected cost centre")
         cols_d = ["period_month", "fiscal_year", "budget_gbp", "actual_gbp", "forecast_gbp", "variance_gbp", "variance_pct"]
         download(d[cols_d], f"{sel['dimension_key']} monthly budget", key="dl_bud_drill")

@@ -43,12 +43,35 @@ FORMATS = {
 }
 
 
+AXIS_TITLE_FONT = {"size": 13, "color": NAVY}
+TICK_FONT = {"size": 11, "color": NAVY_2}
+
+
+def _pretty(name: str | None) -> str | None:
+    """Column name -> readable axis title (``net_sales_gbp`` -> ``Net sales gbp``)."""
+    if not name:
+        return None
+    text = str(name).replace("_", " ").strip()
+    if text.isupper() or "_" in str(name):
+        text = text.lower()
+    return text[:1].upper() + text[1:]
+
+
 def _axis(kind: str | None, title: str | None = None) -> dict:
-    out = {"title": {"text": title, "font": {"size": 12}} if title else None,
-           "gridcolor": GRID, "zeroline": False, "linecolor": GRID}
+    out = {"gridcolor": GRID, "zeroline": False, "linecolor": GRID, "automargin": True,
+           "tickfont": TICK_FONT, "title": {"font": AXIS_TITLE_FONT, "standoff": 10}}
+    if title:
+        out["title"]["text"] = title
     if kind:
         out.update(FORMATS[kind])
     return out
+
+
+def _fill_titles(fig: go.Figure) -> None:
+    """Keep axis titles visible: replace raw column names Plotly Express set with readable ones."""
+    for axis in (fig.layout.xaxis, fig.layout.yaxis):
+        if axis.title.text:
+            axis.title.text = _pretty(axis.title.text)
 
 
 def style(fig: go.Figure, *, height: int = 320, y: str | None = None, x: str | None = None,
@@ -56,7 +79,7 @@ def style(fig: go.Figure, *, height: int = 320, y: str | None = None, x: str | N
           hovermode: str | None = "x unified") -> go.Figure:
     fig.update_layout(
         height=height,
-        margin={"l": 8, "r": 8, "t": 36 if legend else 12, "b": 8},
+        margin={"l": 16, "r": 16, "t": 40 if legend else 16, "b": 16},
         font={"family": FONT, "size": 12, "color": NAVY},
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
@@ -69,6 +92,7 @@ def style(fig: go.Figure, *, height: int = 320, y: str | None = None, x: str | N
         yaxis=_axis(y, y_title),
         bargap=0.25,
     )
+    _fill_titles(fig)
     return fig
 
 
@@ -85,7 +109,7 @@ def show(fig: go.Figure, alt: str, *, key: str | None = None, select: bool = Fal
 # Builders
 # --------------------------------------------------------------------------- #
 def line(df: pd.DataFrame, x: str, y: str, color: str | None = None, *, kind: str = "gbp",
-         height: int = 320, y_title: str | None = None, target: float | None = None,
+         height: int = 320, y_title: str | None = None, x_title: str | None = None, target: float | None = None,
          target_label: str = "Target", colors: dict | None = None, markers: bool = False) -> go.Figure:
     fig = px.line(df, x=x, y=y, color=color, color_discrete_map=colors, markers=markers,
                   color_discrete_sequence=PALETTE)
@@ -94,13 +118,16 @@ def line(df: pd.DataFrame, x: str, y: str, color: str | None = None, *, kind: st
         fig.add_hline(y=target, line_dash="dot", line_color=AMBER, line_width=1.5,
                       annotation_text=target_label, annotation_position="top left",
                       annotation_font={"color": AMBER, "size": 11})
-    return style(fig, height=height, y=kind, y_title=y_title, legend=color is not None)
+    style(fig, height=height, y=kind, y_title=y_title, legend=color is not None)
+    if x_title:
+        fig.update_xaxes(title_text=x_title)
+    return fig
 
 
 def bar(df: pd.DataFrame, x: str, y: str, color: str | None = None, *, kind: str = "gbp",
         horizontal: bool = False, stacked: bool = True, height: int = 320, value_title: str | None = None,
         colors: dict | None = None, single_colour: str = TEAL, order: list | None = None,
-        text: bool = False) -> go.Figure:
+        text: bool = False, category_title: str | None = None) -> go.Figure:
     kwargs = {"x": y, "y": x, "orientation": "h"} if horizontal else {"x": x, "y": y}
     fig = px.bar(df, color=color, color_discrete_map=colors, barmode="stack" if stacked else "group",
                  color_discrete_sequence=PALETTE if color else [single_colour],
@@ -112,23 +139,24 @@ def bar(df: pd.DataFrame, x: str, y: str, color: str | None = None, *, kind: str
                           f"{fmt.get('ticksuffix', '')}", textposition="outside", cliponaxis=False)
     if horizontal:
         fig = style(fig, height=height, x=kind, x_title=value_title, legend=color is not None, hovermode="y unified")
-        fig.update_yaxes(title=None, autorange="reversed" if not order else None, gridcolor="rgba(0,0,0,0)")
+        fig.update_yaxes(autorange="reversed" if not order else None, gridcolor="rgba(0,0,0,0)")
     else:
         fig = style(fig, height=height, y=kind, y_title=value_title, legend=color is not None)
-        fig.update_xaxes(title=None)
+    if category_title:
+        (fig.update_yaxes if horizontal else fig.update_xaxes)(title_text=category_title)
     return fig
 
 
 def combo(df: pd.DataFrame, x: str, bar_y: str, line_y: str, bar_name: str, line_name: str, *,
           bar_kind: str = "gbp", line_kind: str = "pct", height: int = 320,
-          line_target: float | None = None) -> go.Figure:
+          line_target: float | None = None, x_title: str | None = None) -> go.Figure:
     """Bars on the left axis with a line on a secondary right axis."""
     fig = go.Figure()
     fig.add_bar(x=df[x], y=df[bar_y], name=bar_name, marker_color="#B8C7D9", marker_line_width=0)
     fig.add_scatter(x=df[x], y=df[line_y], name=line_name, mode="lines+markers", yaxis="y2",
                     line={"color": TEAL, "width": 2.4}, marker={"size": 5})
-    style(fig, height=height, y=bar_kind)
-    fig.update_layout(yaxis2={**_axis(line_kind), "overlaying": "y", "side": "right", "showgrid": False})
+    style(fig, height=height, y=bar_kind, y_title=bar_name, x_title=x_title or _pretty(x))
+    fig.update_layout(yaxis2={**_axis(line_kind, line_name), "overlaying": "y", "side": "right", "showgrid": False})
     if line_target is not None:
         fig.add_hline(y=line_target, yref="y2", line_dash="dot", line_color=AMBER, line_width=1.5,
                       annotation_text="Target", annotation_position="top left",
@@ -186,7 +214,8 @@ def heatmap(pivot: pd.DataFrame, *, kind: str = "pct", height: int = 340, revers
     return fig
 
 
-def waterfall(labels: list[str], values: list[float], *, total_label: str = "Total", height: int = 340) -> go.Figure:
+def waterfall(labels: list[str], values: list[float], *, total_label: str = "Total", height: int = 340,
+              x_title: str | None = None, y_title: str | None = None) -> go.Figure:
     """Variance bridge: positive (overspend) red, negative (saving) green."""
     fig = go.Figure(go.Waterfall(
         x=[*labels, total_label], y=[*values, sum(values)], measure=["relative"] * len(values) + ["total"],
@@ -195,7 +224,7 @@ def waterfall(labels: list[str], values: list[float], *, total_label: str = "Tot
         texttemplate="£%{y:~s}", textposition="outside", cliponaxis=False,
         hovertemplate="%{x}<br>£%{y:,.0f}<extra></extra>",
     ))
-    style(fig, height=height, y="gbp", legend=False, hovermode="closest")
+    style(fig, height=height, y="gbp", x_title=x_title, y_title=y_title, legend=False, hovermode="closest")
     return fig
 
 
@@ -211,4 +240,4 @@ def forecast(fc: pd.DataFrame, *, height: int = 380) -> go.Figure:
                     line={"color": SLATE, "width": 1.5, "dash": "dot"})
     fig.add_scatter(x=fut["week"], y=fut["forecast"], name="Forecast", mode="lines+markers",
                     line={"color": TEAL, "width": 2.6}, marker={"size": 5})
-    return style(fig, height=height, y="num", y_title="Units")
+    return style(fig, height=height, y="num", y_title="Units", x_title="Week")

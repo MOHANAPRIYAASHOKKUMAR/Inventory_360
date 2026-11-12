@@ -39,6 +39,7 @@ PAGE_LINKS = {
 }
 CUSTOMER_METRICS = {"net_sales", "fill_rate", "gross_margin", "lost_sales", "lost_sales_share"}
 TOP_N = 25
+UNITS = {"gbp": " (£)", "pct": " (%)", "ratio": " (x)"}
 
 
 def available(metric: str) -> bool:
@@ -61,7 +62,7 @@ def _tab(df: pd.DataFrame, dim: str, dim_label: str, col: str, label: str, kind:
     target = TARGETS[target_key].green if target_key else None
     fig = charts.bar(shown, dim, col, "status" if target_key else None, kind="dec" if kind == "ratio" else kind,
                      horizontal=True, height=max(260, 22 * len(shown) + 60),
-                     colors=charts.RAG_COLOURS if target_key else None, value_title=label)
+                     colors=charts.RAG_COLOURS if target_key else None, value_title=label + UNITS.get(kind, ""), category_title=dim_label)
     if target is not None:
         fig.add_vline(x=target, line_dash="dot", line_color=charts.SLATE,
                       annotation_text=f"Target {target:.0%}" if kind == "pct" else f"Target {target:g}")

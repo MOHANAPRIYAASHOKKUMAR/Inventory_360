@@ -58,12 +58,14 @@ left, right = st.columns(2)
 with left:
     with section(f"Landed cost {grain.lower()}", "Monthly freight + duty"):
         m = ship.groupby(["period_month", dim], as_index=False)["landed_cost_gbp"].sum()
-        charts.show(charts.bar(m, "period_month", "landed_cost_gbp", dim, height=320), alt=f"Monthly landed cost {grain.lower()}")
+        charts.show(charts.bar(m, "period_month", "landed_cost_gbp", dim, height=320,
+                               value_title="Landed cost (£)", category_title="Month"), alt=f"Monthly landed cost {grain.lower()}")
 with right:
     with section("Freight cost per pallet", f"Monthly, {grain.lower()}"):
         c = ship.groupby(["period_month", dim], as_index=False)[["freight_cost_gbp", "pallets"]].sum()
         c["cpp"] = c["freight_cost_gbp"] / c["pallets"].where(c["pallets"] > 0)
-        charts.show(charts.line(c, "period_month", "cpp", dim, kind="gbp2", height=320, markers=True),
+        charts.show(charts.line(c, "period_month", "cpp", dim, kind="gbp2", height=320, markers=True,
+                                y_title="Freight cost per pallet (£)", x_title="Month"),
                     alt=f"Monthly freight cost per pallet {grain.lower()}")
 
 # --------------------------------------------------------------------------- #
@@ -94,7 +96,7 @@ if sel is not None:
         m = ship[(ship["carrier"] == sel["carrier"]) & (ship["transport_mode"] == sel["transport_mode"])] \
             .groupby("period_month", as_index=False)[["landed_cost_gbp", "on_time", "delivered", "pallets", "freight_cost_gbp"]].sum()
         m["otr"] = m["on_time"] / m["delivered"].where(m["delivered"] > 0)
-        charts.show(charts.combo(m, "period_month", "landed_cost_gbp", "otr", "Landed cost", "On-time arrival",
+        charts.show(charts.combo(m, "period_month", "landed_cost_gbp", "otr", "Landed cost (£)", "On-time arrival (%)", x_title="Month",
                                  line_target=TARGETS["on_time_arrival"].green, height=300),
                     alt=f"Monthly landed cost and punctuality for {sel['carrier']}")
         download(m, f"{sel['carrier']} monthly", key="dl_log_drill")

@@ -186,7 +186,7 @@ trend = _trend(grain)
 left, right = st.columns([2, 1])
 with left:
     with section("Stock investment vs availability", f"{grain} average stock value (bars) and on-shelf availability (line)"):
-        charts.show(charts.combo(trend, "period", "stock_value_gbp", "availability", "Stock value", "Availability",
+        charts.show(charts.combo(trend, "period", "stock_value_gbp", "availability", "Stock value (£)", "Availability (%)", x_title="Period",
                                  line_target=TARGETS["availability"].green), alt="Stock value and availability trend")
 with right:
     with section("Current stock status", "Latest snapshot · share of SKU-locations", height="stretch"):
@@ -200,7 +200,8 @@ with left:
     with section("Net sales by channel", f"{grain} net sales by customer channel"):
         by_channel = bucket(sales[sales["sales_date"].between(cur_s, cur_e)], "sales_date", grain,
                             sums=["net_sales_gbp"], by=["channel"])
-        charts.show(charts.bar(by_channel, "period", "net_sales_gbp", "channel", height=300),
+        charts.show(charts.bar(by_channel, "period", "net_sales_gbp", "channel", height=300,
+                                   value_title="Net sales (£)", category_title="Period"),
                     alt="Net sales by customer channel over time")
 with right:
     with section("Exception register", "KPIs against policy targets", height="stretch"):
@@ -280,11 +281,11 @@ if sel is not None:
         c1, c2 = st.columns([1, 1])
         with c1:
             charts.show(charts.bar(split.sort_values("net_sales_gbp", ascending=False), "warehouse_name", "net_sales_gbp",
-                                   horizontal=True, height=320, value_title="Net sales"),
+                                   horizontal=True, height=320, value_title="Net sales (£)", category_title="Warehouse"),
                         alt=f"Net sales by warehouse for {sel['category']}")
         with c2:
             fig = charts.bar(split.sort_values("availability"), "warehouse_name", "availability", "status", kind="pct",
-                             horizontal=True, height=320, colors=charts.RAG_COLOURS, value_title="Availability")
+                             horizontal=True, height=320, colors=charts.RAG_COLOURS, value_title="Availability (%)", category_title="Warehouse")
             charts.show(fig, alt=f"Availability by warehouse for {sel['category']}")
         cols = ["warehouse_code", "warehouse_name", "net_sales_gbp", "gross_margin", "avg_stock_value_gbp",
                 "availability", "status", "lost_sales_gbp"]

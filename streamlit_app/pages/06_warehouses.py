@@ -69,16 +69,18 @@ left, right = st.columns(2)
 with left:
     with section("Peak utilisation by site", "Max of monthly peak pallets ÷ capacity"):
         charts.show(charts.bar(site.sort_values("peak_util", ascending=False), "warehouse_name", "peak_util", "status",
-                               kind="pct", horizontal=True, colors=charts.RAG_COLOURS, height=340),
+                               kind="pct", horizontal=True, colors=charts.RAG_COLOURS, height=340,
+                               value_title="Peak utilisation (%)", category_title="Warehouse"),
                     alt="Peak utilisation by warehouse")
 with right:
     with section("Cost efficiency", "Operating cost per unit dispatched vs throughput · bubble = capacity"):
         charts.show(charts.scatter(site, "dispatched", "cpu", size="capacity", color="site_type", hover="warehouse_name",
-                                   x_kind="num", y_kind="gbp2", x_title="Units dispatched", y_title="£ per unit", height=340),
+                                   x_kind="num", y_kind="gbp2", x_title="Units dispatched", y_title="Cost per unit (£)", height=340),
                     alt="Cost per unit vs throughput by warehouse")
 
 with section("Operating cost trend", "Monthly opex by site"):
-    charts.show(charts.bar(util, "period_month", "opex_gbp", "warehouse_code", height=300), alt="Monthly operating cost by site")
+    charts.show(charts.bar(util, "period_month", "opex_gbp", "warehouse_code", height=300,
+                           value_title="Operating cost (£)", category_title="Month"), alt="Monthly operating cost by site")
 
 with section("Site scorecard", "Select a site to drill into utilisation and cost categories"):
     sel = table(
@@ -104,9 +106,10 @@ if sel is not None:
                 {"avg_utilisation_pct": "Average", "peak_utilisation_pct": "Peak"})
             charts.show(charts.line(long, "period_month", "util", "measure", kind="pct", height=300, markers=True,
                                     target=TARGETS["utilisation_peak"].green, target_label="Alert level",
-                                    colors={"Average": charts.TEAL, "Peak": charts.NAVY}),
+                                    colors={"Average": charts.TEAL, "Peak": charts.NAVY}, y_title="Utilisation (%)", x_title="Month"),
                         alt=f"Monthly utilisation for {sel['warehouse_name']}")
         with c2:
-            charts.show(charts.bar(k, "period_month", "actual_cost_gbp", "cost_category", height=300),
+            charts.show(charts.bar(k, "period_month", "actual_cost_gbp", "cost_category", height=300,
+                                   value_title="Actual cost (£)", category_title="Month"),
                         alt=f"Monthly cost categories for {sel['warehouse_name']}")
         download(k, f"{sel['warehouse_code']} cost detail", key="dl_wh_drill")

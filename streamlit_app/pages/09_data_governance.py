@@ -65,12 +65,12 @@ with tab_cat:
         with section("Rows by schema"):
             agg = view.groupby("table_schema", as_index=False)["row_count"].sum()
             charts.show(charts.bar(agg, "table_schema", "row_count", kind="num", height=260, order=["RAW", "STAGING", "MARTS", "APP"],
-                                   text=True), alt="Row counts by schema")
+                                   text=True, value_title="Rows", category_title="Schema"), alt="Row counts by schema")
     with c2:
         with section("Largest tables"):
             big = view.dropna(subset=["row_count"]).nlargest(10, "row_count")
             charts.show(charts.bar(big, "table_name", "row_count", "table_schema", kind="num", horizontal=True, height=260,
-                                   order=big["table_name"].tolist()), alt="Largest tables by row count")
+                                   order=big["table_name"].tolist(), value_title="Rows", category_title="Table"), alt="Largest tables by row count")
     with section("Data catalogue", "Select an object to see its columns"):
         sel = table(
             view, key="gov_cat", alt="Data catalogue", csv_name="data catalogue", rag_cols=["freshness"], height=420,
